@@ -37,6 +37,7 @@ dev = [
     "pre-commit>=3.0.0",
     "ruff>=0.16.3",
     "mypy>=2.3.1",
+    "codespell>=2.4.3",
 ]
 
 [project.scripts]
@@ -49,6 +50,7 @@ dev = [
     "pre-commit>=3.0.0",
     "ruff>=0.16.3",
     "mypy>=2.3.1",
+    "codespell>=2.4.3",
 ]
 
 [tool.pytest.ini_options]
@@ -78,3 +80,7 @@ source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
 version-file = "ottu/_version.py"
+
+[tool.codespell]
+quiet-level = 3
+skip = ".git,__pycache__,.pytest_cache,.ruff_cache,.mypy_cache,node_modules,.venv"
