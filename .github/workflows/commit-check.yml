@@ -1,0 +1,57 @@
+name: Commit check
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  commitlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 100
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+
+      - name: Install commitlint
+        run: |
+          npm install --save-dev @commitlint/cli @commitlint/config-conventional
+
+      - name: Compute commit range
+        id: range
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # For pull requests, GitHub checks out a synthetic merge commit whose
+            # parents are the base branch and the PR branch. We use their merge-base
+            # as the start of the valid range, so only commits introduced by the PR
+            # are checked.
+            git merge-base HEAD^1 HEAD^2 || git fetch --unshallow origin
+            FROM=$(git merge-base HEAD^1 HEAD^2)
+            TO=$(git rev-parse HEAD^2)
+          else
+            # For direct pushes, prefer the previous SHA when it is still in the
+            # current ancestry. After a rebase or force-push, the old SHA can be
+            # stale, so fall back to the merge-base with the parent branch and then
+            # to HEAD~1 as a last resort.
+            FROM="${{ github.event.before }}"
+            if ! git rev-parse --verify "$FROM" >/dev/null 2>&1 || ! git merge-base --is-ancestor "$FROM" HEAD >/dev/null 2>&1; then
+              FROM=$(git merge-base HEAD origin/main 2>/dev/null || git rev-parse HEAD~1)
+            fi
+            TO="${{ github.sha }}"
+          fi
+
+          echo "from=${FROM}" >> "$GITHUB_OUTPUT"
+          echo "to=${TO}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate commit messages
+        shell: bash
+        run: |
+          echo "Checking commits between ${{ steps.range.outputs.from }} and ${{ steps.range.outputs.to }}..."
+          npx commitlint \
+            --from="${{ steps.range.outputs.from }}" \
+            --to="${{ steps.range.outputs.to }}" \
+            --config commitlint.config.js
