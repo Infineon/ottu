@@ -1,0 +1,32 @@
+name: Format check
+
+on:
+  push: &paths
+    paths:
+      - '.github/workflows/**'
+      - 'ottu/**/*.py'
+      - 'tests/**/*.py'
+      - '*.toml'
+  pull_request: *paths
+
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        enable-cache: true
+
+    - name: Set up Python
+      run: uv python install 3.11
+
+    - name: Install dependencies
+      run: uv sync --all-extras
+
+    - name: Format check with Ruff
+      run: uv run ruff format --check ottu tests --diff
