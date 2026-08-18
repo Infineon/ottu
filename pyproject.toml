@@ -7,7 +7,7 @@ name = "ottu"
 dynamic = ["version"]
 description = "CLI tool for embedded on-target testing"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Infineon Technologies AG", email = "maker@infineon.com"}
@@ -20,7 +20,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -37,6 +36,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "pre-commit>=3.0.0",
     "ruff>=0.16.3",
+    "mypy>=2.3.1",
 ]
 
 [project.scripts]
@@ -48,11 +48,30 @@ dev = [
     "pytest-cov>=4.0.0",
     "pre-commit>=3.0.0",
     "ruff>=0.16.3",
+    "mypy>=2.3.1",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=ottu --cov-report=xml --cov-report=term-missing"
+
+[tool.ruff]
+src = ["ottu", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+files = ["ottu"]
 
 [tool.hatch.version]
 source = "vcs"
