@@ -356,7 +356,7 @@ ottu run --device port=/dev/ttyUSB0 --setup setup_script.py test_name
 This setup script will run before each test when multiple 
 tests are specified. If the setup script fails, the test will not run and the error will be reported (TBD).
 
-If only once before the entire test suite, the `--suite-setup` option can be used instead of `--setup`.
+If a hook should run once before each suite, the `--suite-setup` option can be used instead of `--setup`.
 
 Based on the extension of the script, the tool will try to determine how to run it. For example, if the script is a Python script, it will be run with the Python interpreter. If the script is a shell script, it will be run with the shell interpreter.
 The supported extensions are TBD, but at least `.py` and `.sh` should be supported.
@@ -378,7 +378,7 @@ ottu run --device port=/dev/ttyUSB0 --teardown teardown_script.py
 
 This teardown script will run after each test when multiple tests are specified. If the teardown script fails, the error will be reported, but it will not affect the test result (TBD).
 
-If only once after the entire test suite, the `--suite-teardown` option can be used instead of `--teardown`.
+If a hook should run once after each suite, the `--suite-teardown` option can be used instead of `--teardown`.
 
 As for setup scripts, based on the extension of the script, the tool will try to determine how to run it. For example, if the script is a Python script, it will be run with the Python interpreter. If the script is a shell script, it will be run with the shell interpreter.
 
@@ -598,7 +598,7 @@ working-directory: .
 output:
   dir: out/results
 
-# Optional defaults applied to every test unless overridden
+# Optional defaults applied to every test suite unless overridden
 defaults:
   timeout: 30
   retry: 0
@@ -623,17 +623,18 @@ devices:
     port: /dev/ttyUSB1
     baud: 115200
 
-# Test entries to execute
-tests:
+# Test suites to execute
+suites:
   - name: smoke-controller
-    test: tests/test_controller.py
+    tests:
+      - tests/test_controller.py
     count: 2
     requires:
       device:
         name: STM32 Nucleo F429ZI
 
   - name: integration-link
-    test:
+    tests:
       - tests/test_link.py
       - tests/integration/
       - "tests/**/test_link_*.py"
@@ -661,7 +662,7 @@ tests:
       format: json
 
   - name: server-client-split
-    test:
+    tests:
       - role: server
         order: 1
         test: tests/test_server.py
@@ -686,14 +687,14 @@ tests:
 - `version`: Schema version as SemVer string. Start with `"1.0.0"`.
 - `working-directory`: Root path used to resolve relative paths for tests, scripts, and outputs (including `output.dir`).
 - `output`: Global defaults for output options.
-- `defaults`: Global defaults for per-test options.
+- `defaults`: Global defaults for suite execution options and suite lifecycle hooks.
   This section is optional; if omitted, built-in tool defaults are used.
-- `suite-setup`: Hook that runs once before all tests.
-- `suite-teardown`: Hook that runs once after all tests.
 - `device-list`: Optional path to an external device list file.
 - `devices`: Optional inline list of device entries.
-- `tests`: Ordered list of test entries.
+- `suites`: Ordered list of test-suite entries.
   Default execution order is declaration order.
+
+A test suite is an ordered collection of test selectors and execution metadata that is treated as one logical run. It may resolve to one or many concrete test cases, but it is configured, scheduled, and reported as a single execution unit.
 
 #### 4.1.2 Device Inventory
 
@@ -715,17 +716,17 @@ Device source rules:
 - If both `device-list` and `devices` are provided, `device-list` takes precedence.
 - If no device list source is provided, the inline `devices` list is used.
 
-#### 4.1.3 Test Entry Dictionary
+#### 4.1.3 Test Suite Dictionary
 
-Each item under `tests` supports:
+Each item under `suites` supports:
 
-- `name`: Optional test name used in logs and reports.
-- `test`: Test selector.
+- `name`: Optional suite name used in logs and reports.
+- `tests`: Test selector list for the suite.
   - String form: one selector.
   - List form: list of selector strings.
   - Role-aware list form: list of dictionaries with `role` + `test` (+ optional per-item `order`).
 - `requires`: Requirement dictionary for software and device selection.
-- `exclude`: Selector list removed from the expanded `test` set.
+- `exclude`: Selector list removed from the expanded suite `tests` set.
 - `timeout`: Max seconds for this test.
 - `retry`: Retry count for this test.
 - `dry-run`: If true, resolve and print actions only.
@@ -736,6 +737,8 @@ Each item under `tests` supports:
 - `count`: Number of device instances to run this test on.
 - `setup`: Hook before each test case.
 - `teardown`: Hook after each test case.
+- `suite-setup`: Hook run once before the suite.
+- `suite-teardown`: Hook run once after the suite.
 
 Notes:
 
@@ -842,7 +845,7 @@ Test selector list behavior:
 
 #### 4.1.4 Hook Dictionary
 
-Hook keys (`suite-setup`, `suite-teardown`, `setup`, `teardown`) support these forms:
+Hook keys (`suite-setup`, `suite-teardown`, `setup`, `teardown`) support these forms. When defined under `defaults`, they apply to every suite unless overridden by a suite entry.
 
 - String form: command line or script path.
 - List form: argv list, each token as one item.
