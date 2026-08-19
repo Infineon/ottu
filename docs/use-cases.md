@@ -612,17 +612,16 @@ defaults:
   suite-teardown: scripts/suite_teardown.py
 
 # Device inventory used by tests
+device-list:
+  - devices/boards.yaml
+  - devices/lab-boards.yaml
 devices:
-  # Optional device list file, resolved from working-directory
-  list: devices.yaml
-  # Optional inline device entries (used when no device list source overrides it)
-  items:
-    - name: STM32 Nucleo F429ZI
-      port: /dev/ttyUSB0
-      baud: 115200
-    - name: RP2040 Pico W
-      port: /dev/ttyUSB1
-      baud: 115200
+  - name: STM32 Nucleo F429ZI
+    port: /dev/ttyUSB0
+    baud: 115200
+  - name: RP2040 Pico W
+    port: /dev/ttyUSB1
+    baud: 115200
 
 # Test entries to execute
 tests:
@@ -691,28 +690,30 @@ tests:
   This section is optional; if omitted, built-in tool defaults are used.
 - `suite-setup`: Hook that runs once before all tests.
 - `suite-teardown`: Hook that runs once after all tests.
-- `devices`: Device source dictionary for reusable device inventory.
+- `device-list`: Optional path to an external device list file.
+- `devices`: Optional inline list of device entries.
 - `tests`: Ordered list of test entries.
   Default execution order is declaration order.
 
-#### 4.1.2 Device Dictionary
+#### 4.1.2 Device Inventory
 
-`devices` supports:
+`device-list` and `devices` are alternative sources for the device inventory:
 
-- `list`: Optional path to a device list file (for example `devices.yaml`).
-- `items`: Optional inline device entry list.
+- `device-list`: Path or list of paths to device inventory files (for example `devices.yaml` or `[devices.yaml, lab_devices.yaml]`).
+- `devices`: Inline list of device entries.
 
-Each entry under `devices.items` supports:
+Each entry under `devices` supports:
 
 - `name`: Hardware/device name (not a role), used for references in tests.
 - Additional device fields are defined by the device/backend layer and are intentionally not detailed in this section.
 
 Device source rules:
 
-- Relative `devices.list` paths are resolved against `working-directory`.
-- CLI `--device-list` overrides schema `devices.list`.
-- Schema `devices.list` overrides schema `devices.items`.
-- If no device list source is provided, `devices.items` is used.
+- Relative `device-list` paths are resolved against `working-directory`.
+- If `device-list` is a list, file entries are merged in declaration order.
+- CLI `--device-list` overrides schema `device-list`.
+- If both `device-list` and `devices` are provided, `device-list` takes precedence.
+- If no device list source is provided, the inline `devices` list is used.
 
 #### 4.1.3 Test Entry Dictionary
 
