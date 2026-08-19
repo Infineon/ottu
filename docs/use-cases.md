@@ -94,6 +94,11 @@ ottu run --help
 - Results are collected and displayed
 - Exit code indicates pass/fail status
 
+> [!NOTE]
+> -- Feedback --
+> - Failure reporting should go beyond pass/fail and include the execution phase and error reason when available, for example whether the problem occurred during flash, connect, test execution, or output parsing. See the specific discussion: [NikhitaR-IFX feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3806069368).
+> - Exit code behavior should be defined explicitly, for example 0 for all tests passed, 1 for one or more failed tests, and 2 for device errors. See the specific discussion: [IFX-Anusha exit-code feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3811700737).
+
 ### 1.1. Choosing Which Tests to Run
 
 #### 1.1.1 Running All Project Tests
@@ -239,7 +244,8 @@ ottu run \
 
 **Expected Outcome:**
 - Tests are executed on the target boards.
-- Results are collected and displayed for each role/device.
+- Results are collected and displayed for each role/device. 
+
 - Exit code indicates pass/fail status for each device.
 
 For this use case, tests should be provided as explicit test names, not directories or glob patterns.
@@ -269,6 +275,19 @@ Ordering rules:
 - Role tests without `--role-start-order` run after positioned role tests, in declaration order.
 - `--role-start-order` defines role start sequencing only; it does not require every role test to complete before the next role starts.
 - The same role may be assigned additional later `--role-start-order` values to start that role again in a later phase.
+
+> [!NOTE]
+> -- Feedback --
+> - Per-device result reporting should clearly identify which board instance failed in multi-device runs, especially when several devices share the same role.
+> In a multi-device role run such as five `client` boards executing `test_client.py`, the user needs to know exactly which board instance failed. The run output should identify each instance clearly, for example:
+>
+> `client-01 /dev/ttyUSB1 PASS`
+> `client-02 /dev/ttyUSB2 PASS`
+> `client-03 /dev/ttyUSB3 FAIL`
+>
+> Without a per-instance result label, it is ambiguous which board to reset after a soft reset or a more destructive recovery action.
+>
+> See the related discussion: [NikhitaR-IFX comment on failed board identification](https://github.com/Infineon/ottu/pull/2#discussion_r3805897402)  
 
 #### 2.2.1 Specifying Multiple Devices for a Role
 
@@ -311,6 +330,11 @@ Additional rules:
 - Repeated `--role-start-order` entries for the same role are valid when each value is unique.
 - Later values represent subsequent starts of the same role, not a redefinition of the role test.
 - This is useful for staged flows where one role must participate again after an earlier exchange or setup phase.
+
+> [!NOTE]
+> -- Feedback --
+> The semantics of a repeated role start order should be clarified: whether the role is re-executed from the start, a new process is started, or previous state is preserved. See the specific discussion: [IFX-Anusha role-repeat feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3811774160).
+
 
 ### 2.3 Synchronizing Test Execution Between Devices
 
@@ -407,6 +431,10 @@ The test name can be specified as a relative path from the working directory.
 ottu run --device port=/dev/ttyUSB0 --dry-run test_name
 ```
 
+> [!NOTE]
+> -- Feedback --
+>  Dry-run behavior should be documented clearly: whether it validates configuration and discovery only or also includes readiness checks such as device availability and flashing. See the specific discussion: [IFX-Anusha dry-run feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3811813749).
+
 ## 3.7 Log Level
 
 **Scenario:** A developer wants to control the verbosity of test execution logs.
@@ -449,6 +477,8 @@ The format will be also evaluated based on the tap consumer.
 ```bash
 ottu run --device port=/dev/ttyUSB0 --output-save results.json test_name
 ```
+
+The file will be overwritten if it already exists. If the file does not exist, it will be created.
 
 ## 3.11 Output Parser
 
@@ -494,6 +524,10 @@ ottu run --device port=/dev/ttyUSB0 --output-parser exp-match --output-exp-file 
 ottu run --device port=/dev/ttyUSB0 --device port=/dev/ttyUSB1 --jobs 2 test_name
 ```
 
+Parallel execution is best understood as a job-based model rather than a device-only model. In general, a job is one runnable test target, and that job may require one device or several devices depending on the test. For example, in a fleet of equivalent boards, a set of board-agnostic tests can be scheduled in parallel across all available compatible devices. If `N` matching devices are available, ottu may dispatch up to `N` jobs concurrently, subject to the configured job limit and host resource constraints.
+
+If a test requires more than one device, that test still counts as a single job that consumes the required device set.
+
 ## 3.13 Run failed tests only
 
 **Scenario:** A developer wants to rerun only the tests that failed in the previous run.
@@ -502,6 +536,10 @@ ottu run --device port=/dev/ttyUSB0 --device port=/dev/ttyUSB1 --jobs 2 test_nam
 ```bash
 ottu run --device port=/dev/ttyUSB0 --failed-only
 ```
+
+> [!NOTE]
+> -- Feedback --
+> `--failed-only` should state whether it reruns only the most recent failed tests or all failed tests from the last attempt, and whether it reads from a saved results file. See the specific discussion: [IFX-Anusha failed-only feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3811858908).
 
 ## 3.14 Test Result Directory
 
@@ -1100,4 +1138,20 @@ Some options:
 **Expected Outcome:**
 - Tests stop on the first failure
 - Results collected and displayed
+
+# General Feedback
+
+Use this section to capture cross-cutting comments, open questions, and design notes that should not be lost while discussing specific use cases.
+
+This section summarizes the main design points relevant to the overall device and execution model.
+
+> [!NOTE]
+> - Provide `alias` key for unique user-friendly names of devices . 
+> - Document how to register devices and run the first first test.
+> 
+> See the specific discussion: [NikhitaR-IFX feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3806069368).
+
+
+> [!NOTE]
+> - Clarify case-sensitivity (for example `server` vs `Sever`). See the specific discussion: [IFX-Anusha role-name feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3811747387).
 
