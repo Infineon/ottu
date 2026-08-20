@@ -34,12 +34,12 @@ pip install .
 
 ## 0.1 Basic CLI Commands
 
+**Prerequisites:**
+- ottu is installed and available in PATH.
+
 ### 0.1.1 Show ottu Version
 
 **Scenario:** A developer wants to check which ottu version is installed.
-
-**Prerequisites:**
-- ottu is installed and available in PATH.
 
 **Command:**
 ```bash
@@ -53,9 +53,6 @@ ottu version
 ### 0.1.2 Show Help
 
 **Scenario:** A developer wants to see available commands and options.
-
-**Prerequisites:**
-- None.
 
 **Command:**
 ```bash
@@ -71,8 +68,6 @@ ottu help
 
 **Scenario:** A developer wants to see options for a specific command.
 
-**Prerequisites:**
-- None.
 
 **Command:**
 ```bash
@@ -412,7 +407,7 @@ ottu run --device port=/dev/ttyUSB0 --teardown "python teardown_script.py --arg1
 ```
 ## 3.5 Run Tests from Another Directory
 
-** Scenario:** A developer wants to run tests from a different directory than the current working directory.
+**Scenario:** A developer wants to run tests from a different directory than the current working directory.
 
 
 **Command:**
@@ -537,9 +532,13 @@ If a test requires more than one device, that test still counts as a single job 
 ottu run --device port=/dev/ttyUSB0 --failed-only
 ```
 
+`--failed-only` is defined as a rerun of the failure set from previous executions. When a new run starts, ottu clears the previous run's result artifacts of that test before executing the next batch. If a previously failed test fails again in the new run, it is reported again as a failure (either the same failing record or a newly detected failure). If it passes in the new run, that failure record is no longer present because the old result state has already been cleaned up during the fresh execution.
+This means failure history is kept unless the test passes in a subsequent run.
+
 > [!NOTE]
 > -- Feedback --
-> `--failed-only` should state whether it reruns only the most recent failed tests or all failed tests from the last attempt, and whether it reads from a saved results file. See the specific discussion: [IFX-Anusha failed-only feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3811858908).
+> `--failed-only` behavior still open and consider the need of clean opt/command: [IFX-Anusha failed-only feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3811858908).
+
 
 ## 3.14 Test Result Directory
 
@@ -567,7 +566,7 @@ ottu run --device "board=stm32f4" --count 2 test_name
 - The CLI selects up to `count` devices from the matched device set.
 - `--count` must be a positive integer.
 - `--count` is valid only when the device selector can match multiple devices.
-- If the selector is uniquely identifying one device, using `--count` should be rejected.
+
 
 ## 3.16 CLI Short-Flag Summary 
 
@@ -1151,7 +1150,15 @@ This section summarizes the main design points relevant to the overall device an
 > 
 > See the specific discussion: [NikhitaR-IFX feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3806069368).
 
-
 > [!NOTE]
 > - Clarify case-sensitivity (for example `server` vs `Sever`). See the specific discussion: [IFX-Anusha role-name feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3811747387).
+
+> [!NOTE]
+> - Toolchain validation commands : [feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3819422008).
+
+> [!NOTE]
+> - Consider debugging options : [Akshay feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3819537882).
+
+> [!NOTE]
+> - Consider clean result command : [Naveen feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3819508930).
 
