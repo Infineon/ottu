@@ -1,0 +1,32 @@
+name: Build docs
+
+on:
+  push:
+  pull_request:
+    paths:
+      - docs/**
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        enable-cache: true
+
+    - name: Set up Python
+      run: uv python install 3.13
+
+    - name: Install docs dependencies with uv
+      run: uv sync --only-group docs --no-install-project
+
+    - name: Build docs
+      run: uv run -- make -C docs html
