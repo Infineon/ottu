@@ -32,3 +32,11 @@ jobs:
     
     - name: Run tests with pytest
       run: uv run --python ${{ matrix.python-version }} pytest
+
+    - name: Upload coverage to Coveralls
+      if: matrix.python-version == '3.12'
+      uses: coverallsapp/github-action@v2
+      with:
+        file: ./coverage.xml
+        format: cobertura
+        github-token: ${{ secrets.GITHUB_TOKEN }}
