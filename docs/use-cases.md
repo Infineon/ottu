@@ -363,6 +363,11 @@ ottu run --device port=/dev/ttyUSB0 --retry 3 test_name
 If instead of a test, there are multiple tests, the retry will be applied to each test individually. For example, if there are 3 tests and the retry is set to 3, each test will be retried up to 3 times if it fails.
 
 
+> [!NOTE]
+> -- Feedback --
+> Consider if retries should happen immediately after a test fail, or after all test of a suite have failed: [Naveen feedback](https://github.com/Infineon/ottu/pull/2#discussion_r3820245856).
+
+
 ## 3.3 Setup Script
 
 **Scenario:** A developer wants to run a setup script before running the tests.
