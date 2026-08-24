@@ -40,6 +40,11 @@ dev = [
     "codespell>=2.4.3",
 ]
 
+docs = [
+    "Sphinx>=8.0,<9.0",
+    "sphinx-rtd-theme>=3.0.2",
+]
+
 [project.scripts]
 ottu = "ottu.cli:main"
 
@@ -51,6 +56,16 @@ dev = [
     "ruff>=0.16.3",
     "mypy>=2.3.1",
     "codespell>=2.4.3",
+]
+
+docs = [
+    "Sphinx>=8.0,<9.0",
+    "sphinx-rtd-theme>=3.0.2",
+]
+
+docs-dev = [
+    "sphinx-autobuild>=2024.10.3",
+    {include-group = "docs"},
 ]
 
 [tool.pytest.ini_options]
