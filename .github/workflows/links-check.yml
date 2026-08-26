@@ -7,7 +7,6 @@ on:
       - main
     tags:
       - '*'
-  pull_request:
   schedule:
     - cron: '30 3 * * 4' # Run every Thursday at 3:30 AM UTC
 
