@@ -72,6 +72,15 @@ docs-dev = [
 testpaths = ["tests"]
 addopts = "--cov=ottu --cov-report=xml --cov-report=term-missing"
 
+[tool.coverage.run]
+omit = ["ottu/_version.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
+
 [tool.ruff]
 src = ["ottu", "tests"]
 
