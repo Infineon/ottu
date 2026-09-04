@@ -22,7 +22,7 @@ Produces new/updated tests under `tests/`, a passing `uv run pytest` run, and a 
 - List every branch: return paths, `if`/`else`, loops, exception handlers, early returns, CLI options/flags.
 
 ### 2. Inspect existing tests
-- Test files live in `tests/`, named `test_<module>.py` (e.g. [tests/test_cli.py](tests/test_cli.py)).
+- Test files live in `tests/`, named `test_<module>.py` (e.g. `tests/test_cli.py`).
 - Match the existing style: plain `pytest` functions, `click.testing.CliRunner` for CLI commands, `tmp_path`/`monkeypatch` fixtures instead of real I/O or env mutation.
 - Extend an existing test file when one matches the module; only create a new file when none exists.
 
@@ -36,7 +36,7 @@ Produces new/updated tests under `tests/`, a passing `uv run pytest` run, and a 
 ```bash
 uv run pytest --cov-fail-under=90
 ```
-Coverage is already wired via `addopts = "--cov=ottu --cov-report=xml --cov-report=term-missing"` in [pyproject.toml](pyproject.toml), so the terminal output includes a `Missing` column. Total coverage must be **above 90%** — the run fails otherwise.
+Coverage is already wired via `addopts = "--cov=ottu --cov-report=xml --cov-report=term-missing"` in `pyproject.toml`, so the terminal output includes a `Missing` column. Total coverage must be **above 90%** — the run fails otherwise.
 
 ### 5. Iterate
 Loop until the completion checks pass:
