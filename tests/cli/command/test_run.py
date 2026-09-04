@@ -39,6 +39,7 @@ def test_run_discovers_default_test_directory(project):
     )
     assert result.exit_code == 0
     assert str(test_file) in result.output
+    assert f"Running test: {test_file}\n" in result.output
 
 
 def test_run_discovery_accepts_custom_directory_and_pattern(project):
