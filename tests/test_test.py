@@ -98,6 +98,27 @@ def test_validate_and_resolve_all_discovers_when_inputs_are_empty(tmp_path):
     assert [entry.absolute_path for entry in result] == [test_file]
 
 
+def test_validate_and_resolve_all_excludes_matching_glob(tmp_path):
+    """Exclusions can remove multiple discovered files with one glob."""
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    included = tests_dir / "keep.py"
+    excluded_first = tests_dir / "skip_first.py"
+    excluded_second = tests_dir / "skip_second.py"
+    included.touch()
+    excluded_first.touch()
+    excluded_second.touch()
+
+    result = TestPathResolver.validate_and_resolve_all(
+        [],
+        working_dir=tmp_path,
+        pattern="**/*.py",
+        exclude=["skip_*.py"],
+    )
+
+    assert [entry.absolute_path for entry in result] == [included]
+
+
 def test_discover_finds_files_recursively_in_default_tests_directory(tmp_path):
     """Discovery finds all files under the default test directory."""
     application_file = tmp_path / "app.py"
