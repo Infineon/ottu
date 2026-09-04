@@ -18,12 +18,14 @@ from ottu.test import TestPathResolver
     default=None,
     help="Glob pattern used for automatic test discovery.",
 )
+@click.option("--exclude", "-x", multiple=True, type=str, help="Tests to exclude.")
 @click.pass_obj
 def run(
     cli_ctx: CliContext,
     tests: tuple[str, ...],
     tests_dir: str | None,
     pattern: str | None,
+    exclude: tuple[str, ...],
 ) -> None:
     """Run the main command with the given CLI context."""
     test_inputs = () if pattern is not None else tests
@@ -38,5 +40,6 @@ def run(
         project_root=cli_ctx.project_root,
         tests_dir=tests_dir,
         pattern=pattern or "**/*",
+        exclude=exclude,
     )
     click.echo(f"Resolved tests: {test_list}")
