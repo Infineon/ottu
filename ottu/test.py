@@ -131,24 +131,37 @@ class TestPathResolver:
         project_root: str | Path | None = None,
         tests_dir: str | Path | None = None,
         pattern: str = "**/*",
+        exclude: Sequence[str] = (),
     ) -> list[TestPath]:
-        """Validate explicit inputs or discover tests when none are provided."""
+        """Resolve inputs, then remove any paths selected by exclusions."""
         if not tests:
-            return TestPathResolver.discover(
+            resolved_tests = TestPathResolver.discover(
                 working_dir=working_dir,
                 project_root=project_root,
                 tests_dir=tests_dir,
                 pattern=pattern,
             )
-
-        resolved_tests: list[TestPath] = []
-        for test_input in tests:
-            resolved_tests.extend(
-                TestPathResolver.resolve(
-                    test_input, working_dir, project_root, tests_dir
+        else:
+            resolved_tests = []
+            for test_input in tests:
+                resolved_tests.extend(
+                    TestPathResolver.resolve(
+                        test_input, working_dir, project_root, tests_dir
+                    )
                 )
+
+        excluded_paths = {
+            path.absolute_path
+            for exclusion in exclude
+            for path in TestPathResolver.resolve(
+                exclusion, working_dir, project_root, tests_dir
             )
-        return resolved_tests
+        }
+        return [
+            test_path
+            for test_path in resolved_tests
+            if test_path.absolute_path not in excluded_paths
+        ]
 
     @staticmethod
     def _candidate_paths(
