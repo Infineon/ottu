@@ -207,3 +207,30 @@ class TestPathResolver:
             if candidate.exists() and (candidate.is_file() or candidate.is_dir()):
                 return candidate
         return None
+
+
+@dataclass
+class Test:
+    # Prevent pytest from collecting this application class as a test class.
+    __test__ = False
+
+    test_path: TestPath
+
+    def run(self) -> None:
+        """Run one resolved test using the future framework backend."""
+        print(f"Running test: {self.test_path.absolute_path}")
+
+
+@dataclass
+class TestSuite:
+    """Run a collection of resolved tests in sequence."""
+
+    # Prevent pytest from collecting this application class as a test class.
+    __test__ = False
+
+    tests: Sequence[TestPath]
+
+    def run(self) -> None:
+        """Run each collected test in input order."""
+        for test_path in self.tests:
+            Test(test_path).run()
