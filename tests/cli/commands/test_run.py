@@ -171,3 +171,88 @@ def test_run_rejects_missing_test_path(project):
     assert result.exit_code != 0
     assert isinstance(result.exception, ValueError)
     assert str(result.exception) == "Test path 'missing.py' does not exist."
+
+
+def test_run_excludes_valid_test_input(project):
+    """Run validates exclusions and removes matching resolved tests."""
+    root, _ = project
+    included = root / "tests" / "included.py"
+    excluded = root / "tests" / "excluded.py"
+    included.parent.mkdir()
+    included.touch()
+    excluded.touch()
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--project-root",
+            str(root),
+            "--working-dir",
+            str(root),
+            "run",
+            "--pattern",
+            "**/*.py",
+            "--exclude",
+            "excluded.py",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert str(included) in result.output
+    assert str(excluded) not in result.output
+
+
+def test_run_accepts_multiple_exclusions(project):
+    """Run validates and applies every repeated exclude option."""
+    root, _ = project
+    tests_dir = root / "tests"
+    tests_dir.mkdir()
+    included = tests_dir / "included.py"
+    excluded_first = tests_dir / "excluded_first.py"
+    excluded_second = tests_dir / "excluded_second.py"
+    included.touch()
+    excluded_first.touch()
+    excluded_second.touch()
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--project-root",
+            str(root),
+            "--working-dir",
+            str(root),
+            "run",
+            "--pattern",
+            "**/*.py",
+            "--exclude",
+            "excluded_first.py",
+            "--exclude",
+            "excluded_second.py",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert str(included) in result.output
+    assert str(excluded_first) not in result.output
+    assert str(excluded_second) not in result.output
+
+
+def test_run_rejects_missing_exclusion(project):
+    """Run fails when an exclusion cannot be resolved."""
+    root, _ = project
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--project-root",
+            str(root),
+            "--working-dir",
+            str(root),
+            "run",
+            "--exclude",
+            "missing.py",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert str(result.exception) == "Test path 'missing.py' does not exist."
