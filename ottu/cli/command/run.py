@@ -3,7 +3,7 @@
 import click
 
 from ottu.cli.context import CliContext
-from ottu.test import TestPathResolver
+from ottu.test import TestPathResolver, TestSuite
 
 
 @click.command()
@@ -43,3 +43,4 @@ def run(
         exclude=exclude,
     )
     click.echo(f"Resolved tests: {test_list}")
+    TestSuite(test_list).run()

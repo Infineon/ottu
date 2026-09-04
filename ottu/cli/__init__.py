@@ -3,7 +3,7 @@
 import click
 
 from ottu import __version__
-from ottu.cli.commands.run import run
+from ottu.cli.command.run import run
 from ottu.cli.context import CliContext
 
 
