@@ -22,29 +22,29 @@ class SuiteParallelism(Enum):
     ROLED = "roled"
 
 
-@dataclass
+@dataclass(frozen=True)
 class SuiteOpts:
+    """Validated suite options and input-specific test options."""
+
     parallelism: SuiteParallelism | None = None
+    inputs: tuple[tuple[str, TestOpts], ...] = ()
+    default_test_options: TestOpts = TestOpts()
 
-
-@dataclass
-class Suite:
-    """Run a collection of resolved tests in sequence."""
-
-    options: SuiteOpts
-    tests: Sequence[Test]
-
-    @staticmethod
-    def _classify_test_inputs(
+    @classmethod
+    def from_inputs(
+        cls,
         test_inputs: Sequence[str],
-    ) -> tuple[SuiteParallelism | None, tuple[tuple[str | None, str], ...]]:
-        """Classify role-qualified inputs and determine suite parallelism."""
+        counts: Sequence[str] = (),
+    ) -> "SuiteOpts":
+        """Parse and validate suite inputs and their test options."""
         role_inputs: dict[str, str] = {}
         plain_inputs: list[str] = []
 
         for test_input in test_inputs:
-            role_match = fullmatch(r"([^=]+)=(.+)", test_input)
+            role_match = fullmatch(r"([^=]+)=([^=]+)", test_input)
             if role_match is None:
+                if "=" in test_input:
+                    raise ValueError("Role-qualified inputs must use key=value format.")
                 plain_inputs.append(test_input)
                 continue
 
@@ -58,34 +58,86 @@ class Suite:
                 "Multi-role inputs cannot be mixed with unqualified tests."
             )
 
-        parallelism = SuiteParallelism.ROLED if role_inputs else None
-        parsed_inputs = (
-            tuple((role, test_path) for role, test_path in role_inputs.items())
-            if role_inputs
-            else tuple((None, test_path) for test_path in plain_inputs)
-        )
-        return parallelism, parsed_inputs
+        if role_inputs:
+            role_counts = cls._classify_role_counts(role_inputs, counts)
+            inputs = tuple(
+                (
+                    test_path,
+                    TestOpts(role=role, count=role_counts.get(role, 1)),
+                )
+                for role, test_path in role_inputs.items()
+            )
+            return cls(SuiteParallelism.ROLED, inputs)
+
+        count = cls._classify_replicated_count(counts)
+        test_options = TestOpts(count=count)
+        inputs = tuple((test_input, test_options) for test_input in plain_inputs)
+        parallelism = SuiteParallelism.REPLICATED if counts else None
+        return cls(parallelism, inputs, test_options)
+
+    @staticmethod
+    def _classify_replicated_count(counts: Sequence[str]) -> int:
+        """Validate the single count allowed for replicated inputs."""
+        if not counts:
+            return 1
+        if len(counts) != 1 or "=" in counts[0]:
+            raise ValueError("Only one numeric count is allowed for replicated tests.")
+        try:
+            count = int(counts[0])
+        except ValueError as error:
+            raise ValueError("Count must be a positive integer.") from error
+        if count < 1:
+            raise ValueError("Count must be a positive integer.")
+        return count
+
+    @staticmethod
+    def _classify_role_counts(
+        role_inputs: dict[str, str], counts: Sequence[str]
+    ) -> dict[str, int]:
+        """Validate counts assigned to role-qualified inputs."""
+        role_counts: dict[str, int] = {}
+        for count_input in counts:
+            count_match = fullmatch(r"([^=]+)=([^=]+)", count_input)
+            if count_match is None:
+                raise ValueError("Role counts must use the role=count format.")
+            role, raw_count = count_match.groups()
+            if role not in role_inputs:
+                raise ValueError(f"Unknown role '{role}' in count.")
+            if role in role_counts:
+                raise ValueError(f"Role '{role}' count was provided more than once.")
+            try:
+                count = int(raw_count)
+            except ValueError as error:
+                raise ValueError("Count must be a positive integer.") from error
+            if count < 1:
+                raise ValueError("Count must be a positive integer.")
+            role_counts[role] = count
+        return role_counts
+
+
+@dataclass
+class Suite:
+    """Run a collection of resolved tests in sequence."""
+
+    options: SuiteOpts
+    tests: Sequence[Test]
 
     @classmethod
     def _create_tests(
         cls,
-        classified_inputs: tuple[tuple[str | None, str], ...],
+        options: SuiteOpts,
         *,
-        counts: Sequence[str] = (),
         working_dir: str | Path | None = None,
         project_root: str | Path | None = None,
         tests_dir: str | Path | None = None,
         pattern: str = "**/*",
         exclude: Sequence[str] = (),
     ) -> list[Test]:
-        """Create role-aware tests from classified inputs."""
-        count_by_role, replicated_count = cls._classify_counts(
-            classified_inputs, counts
-        )
-        if not classified_inputs:
+        """Resolve SuiteOpts inputs into tests."""
+        if not options.inputs:
             return Test.from_inputs(
                 (),
-                options=TestOpts(count=replicated_count),
+                options=options.default_test_options,
                 working_dir=working_dir,
                 project_root=project_root,
                 tests_dir=tests_dir,
@@ -94,29 +146,29 @@ class Suite:
             )
 
         tests: list[Test] = []
-        for role, test_input in classified_inputs:
-            if role is not None and has_magic(test_input):
+        for test_input, test_options in options.inputs:
+            if test_options.role is not None and has_magic(test_input):
                 raise ValueError(
-                    f"Role '{role}' must reference one test file, not a pattern."
+                    f"Role '{test_options.role}' must reference one test file, "
+                    "not a pattern."
                 )
 
             role_tests = Test.from_inputs(
                 (test_input,),
-                options=TestOpts(
-                    role=role,
-                    count=count_by_role.get(role, replicated_count),
-                ),
+                options=test_options,
                 working_dir=working_dir,
                 project_root=project_root,
                 tests_dir=tests_dir,
                 pattern=pattern,
                 exclude=exclude,
             )
-            if role is not None and (
+            if test_options.role is not None and (
                 len(role_tests) != 1
                 or not role_tests[0].test_path.absolute_path.is_file()
             ):
-                raise ValueError(f"Role '{role}' must reference exactly one test file.")
+                raise ValueError(
+                    f"Role '{test_options.role}' must reference exactly one test file."
+                )
             tests.extend(role_tests)
         return tests
 
@@ -132,65 +184,17 @@ class Suite:
         exclude: Sequence[str] = (),
         counts: Sequence[str] = (),
     ) -> "Suite":
-        """Resolve CLI test inputs and create an executable suite."""
-        parallelism, classified_inputs = cls._classify_test_inputs(test_inputs)
+        """Resolve CLI inputs and create an executable suite."""
+        options = SuiteOpts.from_inputs(test_inputs, counts)
         tests = cls._create_tests(
-            classified_inputs,
-            counts=counts,
+            options,
             working_dir=working_dir,
             project_root=project_root,
             tests_dir=tests_dir,
             pattern=pattern,
             exclude=exclude,
         )
-        if counts and (not classified_inputs or classified_inputs[0][0] is None):
-            parallelism = SuiteParallelism.REPLICATED
-        return cls(
-            options=SuiteOpts(parallelism=parallelism),
-            tests=tests,
-        )
-
-    @staticmethod
-    def _classify_counts(
-        classified_inputs: tuple[tuple[str | None, str], ...],
-        counts: Sequence[str],
-    ) -> tuple[dict[str | None, int], int]:
-        """Validate count selectors and return role and replicated counts."""
-        if not counts:
-            return {}, 1
-
-        has_roles = bool(classified_inputs and classified_inputs[0][0] is not None)
-        if not has_roles:
-            if len(counts) != 1 or "=" in counts[0]:
-                raise ValueError(
-                    "Only one numeric count is allowed for replicated tests."
-                )
-            try:
-                replicated_count = int(counts[0])
-            except ValueError as error:
-                raise ValueError("Count must be a positive integer.") from error
-            if replicated_count < 1:
-                raise ValueError("Count must be a positive integer.")
-            return {}, replicated_count
-
-        count_by_role: dict[str | None, int] = {}
-        roles = {role for role, _ in classified_inputs}
-        for count_input in counts:
-            if "=" not in count_input:
-                raise ValueError("Role counts must use the role=count format.")
-            role, raw_count = count_input.split("=", 1)
-            if role not in roles:
-                raise ValueError(f"Unknown role '{role}' in count.")
-            if role in count_by_role:
-                raise ValueError(f"Role '{role}' count was provided more than once.")
-            try:
-                count = int(raw_count)
-            except ValueError as error:
-                raise ValueError("Count must be a positive integer.") from error
-            if count < 1:
-                raise ValueError("Count must be a positive integer.")
-            count_by_role[role] = count
-        return count_by_role, 1
+        return cls(options=options, tests=tests)
 
     def run(self) -> None:
         """Run the suite using the configured execution strategy."""
@@ -221,15 +225,11 @@ class Suite:
             for test in self.tests
             for _ in range(test.options.count)
         ]
-
         for process in processes:
             process.start()
-
         for process in processes:
             process.join()
-
-        failed = [process for process in processes if process.exitcode != 0]
-        if failed:
+        if any(process.exitcode != 0 for process in processes):
             raise RuntimeError("One or more replicated tests failed.")
 
     def _run_distributed(self) -> None:
@@ -243,13 +243,9 @@ class Suite:
             for test in self.tests
             for _ in range(test.options.count)
         ]
-
         for process in processes:
             process.start()
-
         for process in processes:
             process.join()
-
-        failed = [process for process in processes if process.exitcode != 0]
-        if failed:
+        if any(process.exitcode != 0 for process in processes):
             raise RuntimeError("One or more role tests failed.")
