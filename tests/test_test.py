@@ -1,7 +1,7 @@
 """Test path resolution tests."""
 
 import pytest
-from ottu.test import Test, TestPath, TestPathResolver
+from ottu.test import Test, TestOpts, TestPath, TestPathResolver
 
 
 def test_resolve_relative_path_from_working_directory(tmp_path):
@@ -181,9 +181,49 @@ def test_test_from_inputs_preserves_count_and_role(tmp_path):
     test_file = tmp_path / "check.py"
     test_file.touch()
 
-    tests = Test.from_inputs(["check.py"], role="client", count=3, working_dir=tmp_path)
+    tests = Test.from_inputs(
+        ["check.py"],
+        options=TestOpts(role="client", count=3),
+        working_dir=tmp_path,
+    )
 
-    assert [(test.role, test.count) for test in tests] == [("client", 3)]
+    assert [(test.options.role, test.options.count) for test in tests] == [
+        ("client", 3)
+    ]
+
+
+def test_test_opts_validates_role_and_count():
+    """TestOpts stores valid role and count values."""
+    options = TestOpts.from_values(role="client", count="3")
+
+    assert options == TestOpts(role="client", count=3)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"role": "", "count": 1},
+        {"role": "   ", "count": 1},
+        {"role": None, "count": 0},
+        {"role": None, "count": "invalid"},
+    ],
+)
+def test_test_opts_rejects_invalid_values(options):
+    """TestOpts rejects empty roles and invalid counts."""
+    with pytest.raises(ValueError):
+        TestOpts.from_values(**options)
+
+
+def test_test_accepts_explicit_options(tmp_path):
+    """Test stores an explicit TestOpts object."""
+    test_path = TestPath(tmp_path / "check.py", tmp_path / "check.py", None, "check.py")
+    options = TestOpts(role="client", count=2)
+
+    test = Test(test_path, options=options)
+
+    assert test.options is options
+    assert test.options.role == "client"
+    assert test.options.count == 2
 
 
 def test_test_from_inputs_rejects_non_positive_count(tmp_path):
@@ -192,4 +232,4 @@ def test_test_from_inputs_rejects_non_positive_count(tmp_path):
     test_file.touch()
 
     with pytest.raises(ValueError, match="positive integer"):
-        Test.from_inputs(["check.py"], count=0, working_dir=tmp_path)
+        Test.from_inputs(["check.py"], options=TestOpts(count=0), working_dir=tmp_path)
