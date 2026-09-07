@@ -1,6 +1,6 @@
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from glob import glob, has_magic
 from pathlib import Path
 
@@ -209,22 +209,50 @@ class TestPathResolver:
         return None
 
 
+@dataclass(frozen=True)
+class TestOpts:
+    """Execution options associated with one test."""
+
+    __test__ = False
+
+    role: str | None = None
+    count: int = 1
+
+    def __post_init__(self) -> None:
+        if self.role is not None and not self.role.strip():
+            raise ValueError("Role must not be empty.")
+        if isinstance(self.count, bool) or self.count < 1:
+            raise ValueError("Test count must be a positive integer.")
+
+    @classmethod
+    def from_values(
+        cls,
+        *,
+        role: str | None = None,
+        count: int | str = 1,
+    ) -> "TestOpts":
+        """Create validated options from user-facing values."""
+        try:
+            parsed_count = int(count)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Test count must be a positive integer.") from error
+        return cls(role=role, count=parsed_count)
+
+
 @dataclass
 class Test:
     # Prevent pytest from collecting this application class as a test class.
     __test__ = False
 
     test_path: TestPath
-    role: str | None = None
-    count: int = 1
+    options: TestOpts = field(default_factory=TestOpts)
 
     @classmethod
     def from_inputs(
         cls,
         test_inputs: Sequence[str],
         *,
-        role: str | None = None,
-        count: int = 1,
+        options: TestOpts = TestOpts(),
         working_dir: str | Path | None = None,
         project_root: str | Path | None = None,
         tests_dir: str | Path | None = None,
@@ -240,9 +268,7 @@ class Test:
             pattern=pattern,
             exclude=exclude,
         )
-        if count < 1:
-            raise ValueError("Test count must be a positive integer.")
-        return [cls(test_path, role=role, count=count) for test_path in test_paths]
+        return [cls(test_path, options=options) for test_path in test_paths]
 
     def run(self) -> None:
         """Run one resolved test using the future framework backend."""
