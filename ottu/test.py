@@ -215,22 +215,31 @@ class Test:
     __test__ = False
 
     test_path: TestPath
+    role: str | None = None
+
+    @classmethod
+    def from_inputs(
+        cls,
+        test_inputs: Sequence[str],
+        *,
+        role: str | None = None,
+        working_dir: str | Path | None = None,
+        project_root: str | Path | None = None,
+        tests_dir: str | Path | None = None,
+        pattern: str = "**/*",
+        exclude: Sequence[str] = (),
+    ) -> list["Test"]:
+        """Resolve test inputs and create tests with an optional role."""
+        test_paths = TestPathResolver.validate_and_resolve_all(
+            test_inputs,
+            working_dir=working_dir,
+            project_root=project_root,
+            tests_dir=tests_dir,
+            pattern=pattern,
+            exclude=exclude,
+        )
+        return [cls(test_path, role=role) for test_path in test_paths]
 
     def run(self) -> None:
         """Run one resolved test using the future framework backend."""
         print(f"Running test: {self.test_path.absolute_path}")
-
-
-@dataclass
-class TestSuite:
-    """Run a collection of resolved tests in sequence."""
-
-    # Prevent pytest from collecting this application class as a test class.
-    __test__ = False
-
-    tests: Sequence[TestPath]
-
-    def run(self) -> None:
-        """Run each collected test in input order."""
-        for test_path in self.tests:
-            Test(test_path).run()
