@@ -5,34 +5,50 @@ from ottu.suite import Suite, SuiteOpts, SuiteParallelism, _run_test_in_process
 from ottu.test import Test, TestOpts, TestPath
 
 
-def test_classify_test_inputs_classifies_single_suite():
+def test_suite_opts_classifies_single_suite():
     """Unqualified inputs are a single-device suite."""
-    mode, classified_inputs = Suite._classify_test_inputs(["test_a.py", "test_b.py"])
+    options = SuiteOpts.from_inputs(["test_a.py", "test_b.py"])
 
-    assert mode is None
-    assert classified_inputs == ((None, "test_a.py"), (None, "test_b.py"))
-
-
-def test_classify_test_inputs_strips_multi_role_prefixes():
-    """Role-qualified inputs become role metadata and plain paths."""
-    mode, classified_inputs = Suite._classify_test_inputs(
-        ["server=server.py", "client=client.py"]
+    assert options.parallelism is None
+    assert options.inputs == (
+        ("test_a.py", TestOpts()),
+        ("test_b.py", TestOpts()),
     )
 
-    assert mode is SuiteParallelism.ROLED
-    assert classified_inputs == (("server", "server.py"), ("client", "client.py"))
+
+def test_suite_opts_classifies_multi_role_inputs():
+    """Role-qualified inputs become role metadata and plain paths."""
+    options = SuiteOpts.from_inputs(["server=server.py", "client=client.py"])
+
+    assert options.parallelism is SuiteParallelism.ROLED
+    assert options.inputs == (
+        ("server.py", TestOpts(role="server")),
+        ("client.py", TestOpts(role="client")),
+    )
 
 
 def test_classify_test_inputs_rejects_duplicate_roles():
     """Each role can have only one test input."""
     with pytest.raises(ValueError, match="provided more than once"):
-        Suite._classify_test_inputs(["server=one.py", "server=two.py"])
+        SuiteOpts.from_inputs(["server=one.py", "server=two.py"])
 
 
 def test_classify_test_inputs_rejects_mixed_roles_and_plain_inputs():
     """Role-qualified and unqualified inputs cannot be mixed."""
     with pytest.raises(ValueError, match="cannot be mixed"):
-        Suite._classify_test_inputs(["server=server.py", "client.py"])
+        SuiteOpts.from_inputs(["server=server.py", "client.py"])
+
+
+def test_suite_opts_rejects_extra_equals_in_role_input():
+    """Role-qualified inputs must contain exactly one equals separator."""
+    with pytest.raises(ValueError):
+        SuiteOpts.from_inputs(["server=server=server.py"])
+
+
+def test_suite_opts_rejects_malformed_role_input():
+    """Role-qualified inputs require both a role and a test path."""
+    with pytest.raises(ValueError, match="key=value"):
+        SuiteOpts.from_inputs(["server="])
 
 
 def test_suite_from_inputs_resolves_tests_and_sets_mode(tmp_path):
