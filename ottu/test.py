@@ -216,6 +216,7 @@ class Test:
 
     test_path: TestPath
     role: str | None = None
+    count: int = 1
 
     @classmethod
     def from_inputs(
@@ -223,6 +224,7 @@ class Test:
         test_inputs: Sequence[str],
         *,
         role: str | None = None,
+        count: int = 1,
         working_dir: str | Path | None = None,
         project_root: str | Path | None = None,
         tests_dir: str | Path | None = None,
@@ -238,7 +240,9 @@ class Test:
             pattern=pattern,
             exclude=exclude,
         )
-        return [cls(test_path, role=role) for test_path in test_paths]
+        if count < 1:
+            raise ValueError("Test count must be a positive integer.")
+        return [cls(test_path, role=role, count=count) for test_path in test_paths]
 
     def run(self) -> None:
         """Run one resolved test using the future framework backend."""
