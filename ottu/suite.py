@@ -6,7 +6,7 @@ from multiprocessing import Process
 from pathlib import Path
 from re import fullmatch
 
-from ottu.test import Test
+from ottu.test import Test, TestOpts
 
 
 def _run_test_in_process(test: Test) -> None:
@@ -85,7 +85,7 @@ class Suite:
         if not classified_inputs:
             return Test.from_inputs(
                 (),
-                count=replicated_count,
+                options=TestOpts(count=replicated_count),
                 working_dir=working_dir,
                 project_root=project_root,
                 tests_dir=tests_dir,
@@ -102,8 +102,10 @@ class Suite:
 
             role_tests = Test.from_inputs(
                 (test_input,),
-                role=role,
-                count=count_by_role.get(role, replicated_count),
+                options=TestOpts(
+                    role=role,
+                    count=count_by_role.get(role, replicated_count),
+                ),
                 working_dir=working_dir,
                 project_root=project_root,
                 tests_dir=tests_dir,
@@ -217,7 +219,7 @@ class Suite:
         processes = [
             Process(target=_run_test_in_process, args=(test,))
             for test in self.tests
-            for _ in range(test.count)
+            for _ in range(test.options.count)
         ]
 
         for process in processes:
@@ -239,7 +241,7 @@ class Suite:
         processes = [
             Process(target=_run_test_in_process, args=(test,))
             for test in self.tests
-            for _ in range(test.count)
+            for _ in range(test.options.count)
         ]
 
         for process in processes:
