@@ -165,3 +165,12 @@ def test_discover_includes_project_root_tests(tmp_path):
     )
 
     assert [entry.absolute_path for entry in result] == [test_file]
+
+
+def test_test_run_reports_resolved_test(capsys, tmp_path):
+    """A test object runs its resolved test path."""
+    test_path = TestPath(tmp_path / "check.py", tmp_path / "check.py", None, "check.py")
+
+    Test(test_path).run()
+
+    assert f"Running test: {tmp_path / 'check.py'}\n" == capsys.readouterr().out
