@@ -3,7 +3,7 @@
 import click
 
 from ottu.cli.context import CliContext
-from ottu.test import TestPathResolver, TestSuite
+from ottu.suite import Suite
 
 
 @click.command()
@@ -34,7 +34,7 @@ def run(
     click.echo(f"Tests directory: {tests_dir}")
     click.echo(f"Tests: {test_inputs}")
 
-    test_list = TestPathResolver.validate_and_resolve_all(
+    suite = Suite.from_inputs(
         test_inputs,
         working_dir=cli_ctx.working_dir,
         project_root=cli_ctx.project_root,
@@ -42,5 +42,5 @@ def run(
         pattern=pattern or "**/*",
         exclude=exclude,
     )
-    click.echo(f"Resolved tests: {test_list}")
-    TestSuite(test_list).run()
+    click.echo(f"Resolved tests: {[test.test_path for test in suite.tests]}")
+    suite.run()
