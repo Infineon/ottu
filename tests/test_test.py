@@ -1,7 +1,7 @@
 """Test path resolution tests."""
 
 import pytest
-from ottu.test import TestPath, TestPathResolver
+from ottu.test import Test, TestPath, TestPathResolver
 
 
 def test_resolve_relative_path_from_working_directory(tmp_path):
