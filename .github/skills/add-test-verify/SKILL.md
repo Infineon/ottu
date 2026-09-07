@@ -36,7 +36,7 @@ Produces new/updated tests under `tests/`, a passing `uv run pytest` run, and a 
 ```bash
 uv run pytest --cov-fail-under=90
 ```
-Coverage is already wired via `addopts = "--cov=ottu --cov-report=xml --cov-report=term-missing"` in `pyproject.toml`, so the terminal output includes a `Missing` column. Total coverage must be **above 90%** — the run fails otherwise.
+Coverage is already wired via `addopts = "--cov=ottu --cov-report=xml --cov-report=html --cov-report=term-missing"` in `pyproject.toml`. The run produces terminal coverage with a `Missing` column, `coverage.xml`, and the browsable HTML report at `htmlcov/index.html`. Total coverage must be **above 90%** — the run fails otherwise.
 
 ### 5. Iterate
 Loop until the completion checks pass:
@@ -48,12 +48,13 @@ Loop until the completion checks pass:
 Keep iterating while total coverage is at or below 90%. Stop when coverage is above 90% and only justified-uncovered lines remain, or when coverage stops improving across two consecutive rounds — in that case report the blocker instead of lowering the threshold.
 
 ### 6. Report
-Summarize: tests added (with file links), pass/fail counts, coverage before → after for the target module, and any lines left uncovered with justification.
+Summarize: tests added (with file links), pass/fail counts, coverage before → after for the target module, the HTML report path (`htmlcov/index.html`), and any lines left uncovered with justification.
 
 ## Completion Checks
 
 - [ ] `uv run pytest --cov-fail-under=90` exits 0
 - [ ] Total coverage is above 90%
+- [ ] `htmlcov/index.html` exists and contains the browsable coverage report
 - [ ] Every new/changed function in the target has at least one test per branch
 - [ ] Coverage for the target module improved, and remaining misses are justified in the summary
 - [ ] No source behavior changed solely to satisfy a test
