@@ -174,3 +174,22 @@ def test_test_run_reports_resolved_test(capsys, tmp_path):
     Test(test_path).run()
 
     assert f"Running test: {tmp_path / 'check.py'}\n" == capsys.readouterr().out
+
+
+def test_test_from_inputs_preserves_count_and_role(tmp_path):
+    """Test construction stores its role and replication count."""
+    test_file = tmp_path / "check.py"
+    test_file.touch()
+
+    tests = Test.from_inputs(["check.py"], role="client", count=3, working_dir=tmp_path)
+
+    assert [(test.role, test.count) for test in tests] == [("client", 3)]
+
+
+def test_test_from_inputs_rejects_non_positive_count(tmp_path):
+    """Test construction requires a positive replication count."""
+    test_file = tmp_path / "check.py"
+    test_file.touch()
+
+    with pytest.raises(ValueError, match="positive integer"):
+        Test.from_inputs(["check.py"], count=0, working_dir=tmp_path)
