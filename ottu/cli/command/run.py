@@ -19,6 +19,14 @@ from ottu.suite import Suite
     help="Glob pattern used for automatic test discovery.",
 )
 @click.option("--exclude", "-x", multiple=True, type=str, help="Tests to exclude.")
+@click.option(
+    "--count",
+    "-c",
+    "counts",
+    multiple=True,
+    type=str,
+    help="Device count selector or role=count value.",
+)
 @click.pass_obj
 def run(
     cli_ctx: CliContext,
@@ -26,6 +34,7 @@ def run(
     tests_dir: str | None,
     pattern: str | None,
     exclude: tuple[str, ...],
+    counts: tuple[str, ...],
 ) -> None:
     """Run the main command with the given CLI context."""
     test_inputs = () if pattern is not None else tests
@@ -41,6 +50,7 @@ def run(
         tests_dir=tests_dir,
         pattern=pattern or "**/*",
         exclude=exclude,
+        counts=counts,
     )
     click.echo(f"Resolved tests: {[test.test_path for test in suite.tests]}")
     suite.run()
