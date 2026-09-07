@@ -2,7 +2,7 @@
 
 import pytest
 from ottu.suite import Suite, SuiteOpts, SuiteParallelism, _run_test_in_process
-from ottu.test import Test, TestPath
+from ottu.test import Test, TestOpts, TestPath
 
 
 def test_classify_test_inputs_classifies_single_suite():
@@ -49,7 +49,7 @@ def test_suite_from_inputs_resolves_tests_and_sets_mode(tmp_path):
 
     assert suite.options.parallelism is SuiteParallelism.ROLED
     assert all(isinstance(test, Test) for test in suite.tests)
-    assert [test.role for test in suite.tests] == ["server", "client"]
+    assert [test.options.role for test in suite.tests] == ["server", "client"]
     assert [test.test_path.absolute_path for test in suite.tests] == [
         server_test,
         client_test,
@@ -64,7 +64,7 @@ def test_suite_from_inputs_sets_replicated_count(tmp_path):
     suite = Suite.from_inputs(["check.py"], counts=("3",), working_dir=tmp_path)
 
     assert suite.options.parallelism is SuiteParallelism.REPLICATED
-    assert [test.count for test in suite.tests] == [3]
+    assert [test.options.count for test in suite.tests] == [3]
 
 
 def test_suite_from_inputs_sets_role_counts(tmp_path):
@@ -80,7 +80,7 @@ def test_suite_from_inputs_sets_role_counts(tmp_path):
         working_dir=tmp_path,
     )
 
-    assert [test.count for test in suite.tests] == [1, 4]
+    assert [test.options.count for test in suite.tests] == [1, 4]
 
 
 @pytest.mark.parametrize("counts", [("1", "2"), ("server=2",), ("bad",), ("0",)])
@@ -131,7 +131,10 @@ def test_test_suite_runs_each_test_in_order(capsys, tmp_path):
     first = TestPath(tmp_path / "first.py", tmp_path / "first.py", None, "first.py")
     second = TestPath(tmp_path / "second.py", tmp_path / "second.py", None, "second.py")
 
-    Suite(SuiteOpts(), [Test(first), Test(second)]).run()
+    Suite(
+        SuiteOpts(),
+        [Test(first, TestOpts()), Test(second, TestOpts())],
+    ).run()
 
     assert capsys.readouterr().out == (
         f"Running test: {tmp_path / 'first.py'}\n"
@@ -179,8 +182,8 @@ def test_roled_runner_starts_all_processes_before_joining(monkeypatch):
             events.append(("join", self.args[0]))
 
     monkeypatch.setattr("ottu.suite.Process", FakeProcess)
-    first = Test(TestPath("first.py", "first.py", None, "first.py"))
-    second = Test(TestPath("second.py", "second.py", None, "second.py"))
+    first = Test(TestPath("first.py", "first.py", None, "first.py"), TestOpts())
+    second = Test(TestPath("second.py", "second.py", None, "second.py"), TestOpts())
 
     Suite(SuiteOpts(SuiteParallelism.ROLED), [first, second]).run()
 
@@ -205,13 +208,11 @@ def test_roled_runner_starts_requested_process_count(monkeypatch):
     monkeypatch.setattr("ottu.suite.Process", FakeProcess)
     server = Test(
         TestPath("server.py", "server.py", None, "server.py"),
-        role="server",
-        count=2,
+        options=TestOpts(role="server", count=2),
     )
     client = Test(
         TestPath("client.py", "client.py", None, "client.py"),
-        role="client",
-        count=1,
+        options=TestOpts(role="client", count=1),
     )
 
     Suite(SuiteOpts(SuiteParallelism.ROLED), [server, client]).run()
@@ -243,8 +244,14 @@ def test_replicated_runner_starts_requested_process_count(monkeypatch):
             events.append(("join", self.args[0]))
 
     monkeypatch.setattr("ottu.suite.Process", FakeProcess)
-    first = Test(TestPath("first.py", "first.py", None, "first.py"), count=2)
-    second = Test(TestPath("second.py", "second.py", None, "second.py"), count=1)
+    first = Test(
+        TestPath("first.py", "first.py", None, "first.py"),
+        TestOpts(count=2),
+    )
+    second = Test(
+        TestPath("second.py", "second.py", None, "second.py"),
+        TestOpts(count=1),
+    )
 
     Suite(SuiteOpts(SuiteParallelism.REPLICATED), [first, second]).run()
 
@@ -275,7 +282,10 @@ def test_replicated_runner_raises_when_a_process_fails(monkeypatch):
             pass
 
     monkeypatch.setattr("ottu.suite.Process", FakeProcess)
-    test = Test(TestPath("failed.py", "failed.py", None, "failed.py"), count=1)
+    test = Test(
+        TestPath("failed.py", "failed.py", None, "failed.py"),
+        TestOpts(count=1),
+    )
 
     with pytest.raises(RuntimeError, match="replicated tests failed"):
         Suite(SuiteOpts(SuiteParallelism.REPLICATED), [test]).run()
