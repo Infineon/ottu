@@ -36,5 +36,6 @@ module.exports = {
     'scope-subject-format': [2, 'always'],
     'signed-off-by': [2, 'always'],
     'header-max-length': [2, 'always', 78],
+    'body-max-line-length': [2, 'always', 78],
   },
 };
