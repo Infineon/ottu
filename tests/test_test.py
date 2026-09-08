@@ -1,14 +1,14 @@
 """Test path resolution tests."""
 
 import pytest
-from ottu.test import Test, TestOpts, TestPath, TestPathResolver
+from ottu.test import Test, TestOpts, TestPath, TestPathContext, TestPathResolver
 
 
 def test_resolve_relative_path_from_working_directory(tmp_path):
     test_file = tmp_path / "check.py"
     test_file.touch()
 
-    result = TestPathResolver.resolve("check.py", working_dir=tmp_path)
+    result = TestPathResolver.resolve("check.py", TestPathContext(working_dir=tmp_path))
 
     assert result == [
         TestPath(test_file, test_file.relative_to(tmp_path), None, "check.py")
@@ -20,7 +20,7 @@ def test_resolve_path_from_default_tests_directory(tmp_path):
     test_file.parent.mkdir()
     test_file.touch()
 
-    result = TestPathResolver.resolve("check.py", working_dir=tmp_path)
+    result = TestPathResolver.resolve("check.py", TestPathContext(working_dir=tmp_path))
 
     assert result[0].absolute_path == test_file
 
@@ -31,7 +31,8 @@ def test_resolve_path_with_project_relative_form(tmp_path):
     test_file.touch()
 
     result = TestPathResolver.resolve(
-        "check.py", working_dir=tmp_path / "work", project_root=tmp_path
+        "check.py",
+        TestPathContext(working_dir=tmp_path / "work", project_root=tmp_path),
     )
 
     assert result[0].project_root_relative_path == test_file.relative_to(tmp_path)
@@ -41,7 +42,9 @@ def test_resolve_absolute_path(tmp_path):
     test_file = tmp_path / "check.py"
     test_file.touch()
 
-    result = TestPathResolver.resolve(str(test_file), working_dir=tmp_path)
+    result = TestPathResolver.resolve(
+        str(test_file), TestPathContext(working_dir=tmp_path)
+    )
 
     assert result[0].absolute_path == test_file
 
@@ -53,7 +56,7 @@ def test_resolve_all_expands_glob(tmp_path):
     (tests_dir / "a.py").touch()
 
     result = TestPathResolver.validate_and_resolve_all(
-        ["*.py"], working_dir=tmp_path, tests_dir="tests"
+        ["*.py"], TestPathContext(working_dir=tmp_path, tests_dir="tests")
     )
 
     assert [entry.file_name for entry in result] == ["a.py", "b.py"]
@@ -62,13 +65,13 @@ def test_resolve_all_expands_glob(tmp_path):
 def test_resolve_unmatched_glob_raises(tmp_path):
     """A glob with no file matches is rejected."""
     with pytest.raises(ValueError, match="did not match any files"):
-        TestPathResolver.resolve("*.py", working_dir=tmp_path)
+        TestPathResolver.resolve("*.py", TestPathContext(working_dir=tmp_path))
 
 
 def test_resolve_missing_path_raises(tmp_path):
     """A non-glob input with no candidates is rejected."""
     with pytest.raises(ValueError, match="does not exist"):
-        TestPathResolver.resolve("missing.py", working_dir=tmp_path)
+        TestPathResolver.resolve("missing.py", TestPathContext(working_dir=tmp_path))
 
 
 def test_validate_and_resolve_all_combines_inputs(tmp_path):
@@ -79,7 +82,11 @@ def test_validate_and_resolve_all_combines_inputs(tmp_path):
     second.touch()
 
     result = TestPathResolver.validate_and_resolve_all(
-        ["first.py", "second.py"], working_dir=tmp_path
+        [
+            "first.py",
+            "second.py",
+        ],
+        TestPathContext(working_dir=tmp_path),
     )
 
     assert [entry.absolute_path for entry in result] == [first, second]
@@ -92,7 +99,20 @@ def test_validate_and_resolve_all_discovers_when_inputs_are_empty(tmp_path):
     test_file.touch()
 
     result = TestPathResolver.validate_and_resolve_all(
-        [], working_dir=tmp_path, pattern="**/*.py"
+        [], TestPathContext(working_dir=tmp_path, pattern="**/*.py")
+    )
+
+    assert [entry.absolute_path for entry in result] == [test_file]
+
+
+def test_validate_and_resolve_all_discovers_for_no_selectors(tmp_path):
+    """No selectors trigger discovery using the supplied context."""
+    test_file = tmp_path / "tests" / "check.py"
+    test_file.parent.mkdir()
+    test_file.touch()
+
+    result = TestPathResolver.validate_and_resolve_all(
+        [], TestPathContext(working_dir=tmp_path, pattern="*.py")
     )
 
     assert [entry.absolute_path for entry in result] == [test_file]
@@ -111,9 +131,8 @@ def test_validate_and_resolve_all_excludes_matching_glob(tmp_path):
 
     result = TestPathResolver.validate_and_resolve_all(
         [],
-        working_dir=tmp_path,
-        pattern="**/*.py",
-        exclude=["skip_*.py"],
+        TestPathContext(working_dir=tmp_path, pattern="**/*.py"),
+        exclude_test_selectors=("skip_*.py",),
     )
 
     assert [entry.absolute_path for entry in result] == [included]
@@ -130,7 +149,7 @@ def test_discover_finds_files_recursively_in_default_tests_directory(tmp_path):
     first.touch()
     second.touch()
 
-    result = TestPathResolver.discover(working_dir=tmp_path)
+    result = TestPathResolver.discover(TestPathContext(working_dir=tmp_path))
 
     assert [entry.absolute_path for entry in result] == [first, second]
 
@@ -145,7 +164,7 @@ def test_discover_applies_custom_pattern_and_directory(tmp_path):
     cpp_test.touch()
 
     result = TestPathResolver.discover(
-        working_dir=tmp_path, tests_dir="fixtures", pattern="**/*.py"
+        TestPathContext(working_dir=tmp_path, tests_dir="fixtures", pattern="**/*.py")
     )
 
     assert [entry.absolute_path for entry in result] == [python_test]
@@ -161,7 +180,9 @@ def test_discover_includes_project_root_tests(tmp_path):
     test_file.touch()
 
     result = TestPathResolver.discover(
-        working_dir=work_dir, project_root=tmp_path / "project", pattern="*.py"
+        TestPathContext(
+            working_dir=work_dir, project_root=tmp_path / "project", pattern="*.py"
+        )
     )
 
     assert [entry.absolute_path for entry in result] == [test_file]
@@ -184,7 +205,7 @@ def test_test_from_inputs_preserves_count_and_role(tmp_path):
     tests = Test.from_inputs(
         ["check.py"],
         options=TestOpts(role="client", count=3),
-        working_dir=tmp_path,
+        context=TestPathContext(working_dir=tmp_path),
     )
 
     assert [(test.options.role, test.options.count) for test in tests] == [
@@ -232,4 +253,8 @@ def test_test_from_inputs_rejects_non_positive_count(tmp_path):
     test_file.touch()
 
     with pytest.raises(ValueError, match="positive integer"):
-        Test.from_inputs(["check.py"], options=TestOpts(count=0), working_dir=tmp_path)
+        Test.from_inputs(
+            ["check.py"],
+            options=TestOpts(count=0),
+            context=TestPathContext(working_dir=tmp_path),
+        )
