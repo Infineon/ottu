@@ -18,34 +18,41 @@ class TestPath:
     file_name: str
 
 
-class TestPathResolver:
-    """Validate and resolve test inputs into :class:`TestPath` objects.
+@dataclass(frozen=True)
+class TestPathContext:
+    """Context used to resolve test selectors into paths."""
 
-    Relative inputs are searched in the working directory, the project root
+    __test__ = False
+
+    working_dir: str | Path | None = None
+    project_root: str | Path | None = None
+    tests_dir: str | Path | None = None
+    pattern: str = "**/*"
+
+
+class TestPathResolver:
+    """Validate and resolve test selectors into :class:`TestPath` objects.
+
+    Relative selectors are searched in the working directory, the project root
     when available, and the default ``test`` or ``tests`` directories under
     those roots. A custom ``tests_dir`` can replace the default directories.
-    Absolute inputs are used directly, and glob patterns resolve to all
+    Absolute selectors are used directly, and glob patterns resolve to all
     matching files. Every resolved result contains absolute, working-directory
     relative, and project-root relative path representations when available.
     """
 
     @staticmethod
     def resolve(
-        test_input: str,
-        working_dir: str | Path | None = None,
-        project_root: str | Path | None = None,
-        tests_dir: str | Path | None = None,
+        test_selector: str,
+        context: TestPathContext,
     ) -> list[TestPath]:
-        """Resolve one test input into one or more concrete test entries."""
-        working_path = Path(working_dir) if working_dir else Path.cwd()
-        project_path = Path(project_root).resolve() if project_root else None
-
-        if has_magic(test_input):
+        """Resolve one selector into one or more concrete test paths."""
+        if has_magic(test_selector):
             matched_files = sorted(
                 {
                     Path(match).resolve()
                     for candidate in TestPathResolver._candidate_paths(
-                        test_input, working_path, project_path, tests_dir
+                        test_selector, context
                     )
                     for match in glob(str(candidate), recursive=True)
                     if Path(match).is_file()
@@ -53,28 +60,21 @@ class TestPathResolver:
             )
             if not matched_files:
                 raise ValueError(
-                    f"Test pattern '{test_input}' did not match any files."
+                    f"Test pattern '{test_selector}' did not match any files."
                 )
             return [
-                TestPathResolver._describe_path(Path(match), working_path, project_path)
+                TestPathResolver._describe_path(Path(match), context)
                 for match in matched_files
             ]
 
-        resolved_path = TestPathResolver._find_input(
-            test_input, working_path, project_path, tests_dir
-        )
+        resolved_path = TestPathResolver._find_input(test_selector, context)
         if resolved_path is None:
-            raise ValueError(f"Test path '{test_input}' does not exist.")
-        return [
-            TestPathResolver._describe_path(resolved_path, working_path, project_path)
-        ]
+            raise ValueError(f"Test path '{test_selector}' does not exist.")
+        return [TestPathResolver._describe_path(resolved_path, context)]
 
     @staticmethod
     def discover(
-        working_dir: str | Path | None = None,
-        project_root: str | Path | None = None,
-        tests_dir: str | Path | None = None,
-        pattern: str = "**/*",
+        context: TestPathContext,
     ) -> list[TestPath]:
         """Discover test files in configured test directories.
 
@@ -84,8 +84,12 @@ class TestPathResolver:
         ``tests`` recursively. ``tests_dir`` selects a custom directory, and
         ``pattern`` can restrict discovery by extension or any glob rule.
         """
-        working_path = Path(working_dir) if working_dir else Path.cwd()
-        project_path = Path(project_root).resolve() if project_root else None
+        working_path = Path(context.working_dir) if context.working_dir else Path.cwd()
+        project_path = (
+            Path(context.project_root).resolve() if context.project_root else None
+        )
+        tests_dir = context.tests_dir
+        pattern = context.pattern
         roots = [working_path]
         if project_path and project_path != working_path.resolve():
             roots.append(project_path)
@@ -101,14 +105,15 @@ class TestPathResolver:
             if Path(match).is_file()
         }
         return [
-            TestPathResolver._describe_path(match, working_path, project_path)
-            for match in sorted(matches)
+            TestPathResolver._describe_path(match, context) for match in sorted(matches)
         ]
 
     @staticmethod
-    def _describe_path(
-        test_path: Path, working_dir: Path, project_root: Path | None
-    ) -> TestPath:
+    def _describe_path(test_path: Path, context: TestPathContext) -> TestPath:
+        working_dir = Path(context.working_dir) if context.working_dir else Path.cwd()
+        project_root = (
+            Path(context.project_root).resolve() if context.project_root else None
+        )
         absolute_path = test_path.resolve()
         project_relative = (
             absolute_path.relative_to(project_root)
@@ -126,36 +131,22 @@ class TestPathResolver:
 
     @staticmethod
     def validate_and_resolve_all(
-        tests: Sequence[str],
-        working_dir: str | Path | None = None,
-        project_root: str | Path | None = None,
-        tests_dir: str | Path | None = None,
-        pattern: str = "**/*",
-        exclude: Sequence[str] = (),
+        test_selectors: Sequence[str],
+        context: TestPathContext,
+        exclude_test_selectors: Sequence[str] = (),
     ) -> list[TestPath]:
-        """Resolve inputs, then remove any paths selected by exclusions."""
-        if not tests:
-            resolved_tests = TestPathResolver.discover(
-                working_dir=working_dir,
-                project_root=project_root,
-                tests_dir=tests_dir,
-                pattern=pattern,
-            )
+        """Resolve test selectors, then remove excluded test selectors."""
+        if not test_selectors:
+            resolved_tests = TestPathResolver.discover(context)
         else:
             resolved_tests = []
-            for test_input in tests:
-                resolved_tests.extend(
-                    TestPathResolver.resolve(
-                        test_input, working_dir, project_root, tests_dir
-                    )
-                )
+            for test_selector in test_selectors:
+                resolved_tests.extend(TestPathResolver.resolve(test_selector, context))
 
         excluded_paths = {
             path.absolute_path
-            for exclusion in exclude
-            for path in TestPathResolver.resolve(
-                exclusion, working_dir, project_root, tests_dir
-            )
+            for exclude_test_selector in exclude_test_selectors
+            for path in TestPathResolver.resolve(exclude_test_selector, context)
         }
         return [
             test_path
@@ -165,27 +156,31 @@ class TestPathResolver:
 
     @staticmethod
     def _candidate_paths(
-        test_input: str,
-        working_dir: Path,
-        project_root: Path | None,
-        tests_dir: str | Path | None,
+        test_selector: str,
+        context: TestPathContext,
     ) -> list[Path]:
-        """Build candidate paths in test-input resolution order.
+        """Build candidate paths in selector resolution order.
 
-        Absolute inputs are used as-is. Relative inputs are checked from the
+        Absolute selectors are used as-is. Relative selectors are checked from the
         working directory, the project root when available, and each root's
         ``test`` and ``tests`` directories. A custom ``tests_dir`` replaces
         the default directory names.
         """
-        input_path = Path(test_input)
+        input_path = Path(test_selector)
         if input_path.is_absolute():
             return [input_path]
 
+        working_dir = Path(context.working_dir) if context.working_dir else Path.cwd()
+        project_root = (
+            Path(context.project_root).resolve() if context.project_root else None
+        )
         roots = [working_dir]
         if project_root:
             roots.append(project_root)
         directory_names = (
-            [Path(tests_dir)] if tests_dir else [Path("test"), Path("tests")]
+            [Path(context.tests_dir)]
+            if context.tests_dir
+            else [Path("test"), Path("tests")]
         )
         return [root / input_path for root in roots] + [
             root / directory / input_path
@@ -195,15 +190,11 @@ class TestPathResolver:
 
     @staticmethod
     def _find_input(
-        test_input: str,
-        working_dir: Path,
-        project_root: Path | None,
-        tests_dir: str | Path | None,
+        test_selector: str,
+        context: TestPathContext,
     ) -> Path | None:
         """Return the first existing candidate that is a file or directory."""
-        for candidate in TestPathResolver._candidate_paths(
-            test_input, working_dir, project_root, tests_dir
-        ):
+        for candidate in TestPathResolver._candidate_paths(test_selector, context):
             if candidate.exists() and (candidate.is_file() or candidate.is_dir()):
                 return candidate
         return None
@@ -250,23 +241,18 @@ class Test:
     @classmethod
     def from_inputs(
         cls,
-        test_inputs: Sequence[str],
+        test_selectors: Sequence[str],
         *,
         options: TestOpts = TestOpts(),
-        working_dir: str | Path | None = None,
-        project_root: str | Path | None = None,
-        tests_dir: str | Path | None = None,
-        pattern: str = "**/*",
-        exclude: Sequence[str] = (),
+        context: TestPathContext | None = None,
+        exclude_test_selectors: Sequence[str] = (),
     ) -> list["Test"]:
-        """Resolve test inputs and create tests with an optional role."""
+        """Resolve test selectors and create tests with supplied options."""
+        context = context or TestPathContext()
         test_paths = TestPathResolver.validate_and_resolve_all(
-            test_inputs,
-            working_dir=working_dir,
-            project_root=project_root,
-            tests_dir=tests_dir,
-            pattern=pattern,
-            exclude=exclude,
+            test_selectors,
+            context,
+            exclude_test_selectors=exclude_test_selectors,
         )
         return [cls(test_path, options=options) for test_path in test_paths]
 
