@@ -6,7 +6,7 @@ from multiprocessing import Process
 from pathlib import Path
 from re import fullmatch
 
-from ottu.test import Test, TestOpts
+from ottu.test import Test, TestOpts, TestPathContext
 
 
 def _run_test_in_process(test: Test) -> None:
@@ -127,22 +127,16 @@ class Suite:
         cls,
         options: SuiteOpts,
         *,
-        working_dir: str | Path | None = None,
-        project_root: str | Path | None = None,
-        tests_dir: str | Path | None = None,
-        pattern: str = "**/*",
-        exclude: Sequence[str] = (),
+        context: TestPathContext,
+        exclude_test_selectors: Sequence[str] = (),
     ) -> list[Test]:
         """Resolve SuiteOpts inputs into tests."""
         if not options.inputs:
             return Test.from_inputs(
                 (),
                 options=options.default_test_options,
-                working_dir=working_dir,
-                project_root=project_root,
-                tests_dir=tests_dir,
-                pattern=pattern,
-                exclude=exclude,
+                context=context,
+                exclude_test_selectors=exclude_test_selectors,
             )
 
         tests: list[Test] = []
@@ -156,11 +150,8 @@ class Suite:
             role_tests = Test.from_inputs(
                 (test_input,),
                 options=test_options,
-                working_dir=working_dir,
-                project_root=project_root,
-                tests_dir=tests_dir,
-                pattern=pattern,
-                exclude=exclude,
+                context=context,
+                exclude_test_selectors=exclude_test_selectors,
             )
             if test_options.role is not None and (
                 len(role_tests) != 1
@@ -186,13 +177,16 @@ class Suite:
     ) -> "Suite":
         """Resolve CLI inputs and create an executable suite."""
         options = SuiteOpts.from_inputs(test_inputs, counts)
-        tests = cls._create_tests(
-            options,
+        context = TestPathContext(
             working_dir=working_dir,
             project_root=project_root,
             tests_dir=tests_dir,
             pattern=pattern,
-            exclude=exclude,
+        )
+        tests = cls._create_tests(
+            options,
+            context=context,
+            exclude_test_selectors=exclude,
         )
         return cls(options=options, tests=tests)
 
