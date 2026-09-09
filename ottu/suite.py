@@ -26,6 +26,11 @@ class SuiteOpts:
     """Validated suite execution options."""
 
     parallelism: SuiteParallelism | None = None
+    jobs: int = 1
+
+    def __post_init__(self) -> None:
+        if type(self.jobs) is not int or self.jobs < 1:
+            raise ValueError("Suite jobs must be a positive integer.")
 
 
 class SuiteInputStrategy:
@@ -44,6 +49,7 @@ class SuiteInputStrategy:
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
+        jobs: int = 1,
     ) -> "Suite":
         """Parse, validate, and construct a suite from raw input values."""
         raise NotImplementedError
@@ -83,6 +89,7 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
+        jobs: int = 1,
     ) -> "Suite":
         """Create a role-based suite with per-role test options."""
         parsed_inputs = cls._parse_inputs(
@@ -103,7 +110,7 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
                 context=context,
             )
             tests.extend(role_tests)
-        return Suite(SuiteOpts(SuiteParallelism.ROLED), tests)
+        return Suite(SuiteOpts(SuiteParallelism.ROLED, jobs), tests)
 
     @classmethod
     def _parse_inputs(
@@ -264,6 +271,7 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
+        jobs: int = 1,
     ) -> "Suite":
         """Create a sequential or replicated suite from normal selectors."""
         parsed_count = cls._parse_count(count) if count else 1
@@ -274,7 +282,7 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
             exclude_test_selectors=exclude_test_selectors,
         )
         parallelism = SuiteParallelism.REPEATED if parsed_count > 1 else None
-        return Suite(SuiteOpts(parallelism), tests)
+        return Suite(SuiteOpts(parallelism, jobs), tests)
 
 
 @dataclass
@@ -292,6 +300,7 @@ class Suite:
         context: TestPathContext | None = None,
         exclude: Sequence[str] = (),
         count: str | None = None,
+        jobs: int = 1,
     ) -> "Suite":
         """Select an input strategy and construct an executable suite."""
         context = context or TestPathContext()
@@ -302,6 +311,7 @@ class Suite:
                     context=context,
                     exclude_test_selectors=exclude,
                     count=count,
+                    jobs=jobs,
                 )
         raise ValueError("No suite input strategy supports the supplied inputs.")
 
