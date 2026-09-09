@@ -104,6 +104,7 @@ def test_suite_from_inputs_resolves_tests_and_sets_mode(tmp_path):
     )
 
     assert suite.options.parallelism is SuiteParallelism.ROLED
+    assert suite.options.jobs == 1
     assert all(isinstance(test, Test) for test in suite.tests)
     assert [test.options.role for test in suite.tests] == ["server", "client"]
     assert [test.test_path.absolute_path for test in suite.tests] == [
@@ -123,6 +124,39 @@ def test_suite_from_inputs_sets_replicated_count(tmp_path):
 
     assert suite.options.parallelism is SuiteParallelism.REPEATED
     assert [test.options.count for test in suite.tests] == [3]
+
+
+def test_suite_from_inputs_sets_jobs(tmp_path):
+    """Suite construction preserves the requested job limit."""
+    test_file = tmp_path / "check.py"
+    test_file.touch()
+
+    suite = Suite.from_inputs(
+        ["check.py"], jobs=2, context=TestPathContext(working_dir=tmp_path)
+    )
+
+    assert suite.options.jobs == 2
+
+
+@pytest.mark.parametrize("jobs", [0, -1, True, "2"])
+def test_suite_opts_rejects_invalid_jobs(jobs):
+    """Suite jobs must be a positive integer rather than a coercible value."""
+    with pytest.raises(ValueError, match="positive integer"):
+        SuiteOpts(jobs=jobs)
+
+
+def test_role_suite_from_inputs_sets_jobs(tmp_path):
+    """Role-based suite construction preserves the requested job limit."""
+    test_file = tmp_path / "server.py"
+    test_file.touch()
+
+    suite = Suite.from_inputs(
+        ["server=server.py"],
+        jobs=2,
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert suite.options.jobs == 2
 
 
 def test_suite_from_inputs_raises_when_no_strategy_matches(monkeypatch):
