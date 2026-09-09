@@ -262,6 +262,53 @@ def test_run_accepts_one_standard_count(project):
     assert str(test_file) in result.output
 
 
+def test_run_accepts_jobs_option(project):
+    """Run accepts a positive concurrent job limit."""
+    root, _ = project
+    test_file = root / "check.py"
+    test_file.touch()
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--project-root",
+            str(root),
+            "--working-dir",
+            str(root),
+            "run",
+            "--jobs",
+            "2",
+            "check.py",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert str(test_file) in result.output
+
+
+def test_run_rejects_non_positive_jobs(project):
+    """Run rejects a job limit below one."""
+    root, _ = project
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--project-root",
+            str(root),
+            "--working-dir",
+            str(root),
+            "run",
+            "--jobs",
+            "0",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid value for" in result.output
+    assert "--jobs" in result.output
+    assert "x>=1" in result.output
+
+
 def test_run_accepts_comma_separated_role_counts(project):
     """Run accepts multiple role counts through one count option."""
     root, _ = project
