@@ -26,6 +26,14 @@ from ottu.test import TestPathContext
     type=str,
     help="Device count or comma-separated role=count values.",
 )
+@click.option(
+    "--jobs",
+    "-j",
+    default=1,
+    type=click.IntRange(min=1),
+    show_default=True,
+    help="Maximum number of concurrent jobs.",
+)
 @click.pass_obj
 def run(
     cli_ctx: CliContext,
@@ -34,6 +42,7 @@ def run(
     pattern: str | None,
     exclude: tuple[str, ...],
     count: str | None,
+    jobs: int,
 ) -> None:
     """Run the main command with the given CLI context."""
     test_inputs = () if pattern is not None else tests
@@ -52,6 +61,7 @@ def run(
         ),
         exclude=exclude,
         count=count,
+        jobs=jobs,
     )
     click.echo(f"Resolved tests: {[test.test_path for test in suite.tests]}")
     suite.run()
