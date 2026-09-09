@@ -6,9 +6,8 @@ from ottu.suite import (
     StandardSuiteInputStrategy,
     Suite,
     SuiteInputStrategy,
+    SuiteJob,
     SuiteOpts,
-    SuiteParallelism,
-    _run_test_in_process,
 )
 from ottu.test import Test, TestOpts, TestPath, TestPathContext
 
@@ -103,7 +102,6 @@ def test_suite_from_inputs_resolves_tests_and_sets_mode(tmp_path):
         context=TestPathContext(working_dir=tmp_path),
     )
 
-    assert suite.options.parallelism is SuiteParallelism.ROLED
     assert suite.options.jobs == 1
     assert all(isinstance(test, Test) for test in suite.tests)
     assert [test.options.role for test in suite.tests] == ["server", "client"]
@@ -122,7 +120,6 @@ def test_suite_from_inputs_sets_replicated_count(tmp_path):
         ["check.py"], count="3", context=TestPathContext(working_dir=tmp_path)
     )
 
-    assert suite.options.parallelism is SuiteParallelism.REPEATED
     assert [test.options.count for test in suite.tests] == [3]
 
 
@@ -145,18 +142,29 @@ def test_suite_opts_rejects_invalid_jobs(jobs):
         SuiteOpts(jobs=jobs)
 
 
-def test_role_suite_from_inputs_sets_jobs(tmp_path):
-    """Role-based suite construction preserves the requested job limit."""
+def test_suite_opts_validate_jobs_accepts_positive_integer():
+    """The jobs validator accepts a positive integer."""
+    SuiteOpts._validate_jobs(1)
+
+
+@pytest.mark.parametrize("jobs", [0, -1, True, "2"])
+def test_suite_opts_validate_jobs_rejects_invalid_value(jobs):
+    """The jobs validator rejects non-positive and non-integer values."""
+    with pytest.raises(ValueError, match="positive integer"):
+        SuiteOpts._validate_jobs(jobs)
+
+
+def test_role_suite_from_inputs_rejects_jobs(tmp_path):
+    """Role-based suite inputs reject explicit job parallelism."""
     test_file = tmp_path / "server.py"
     test_file.touch()
 
-    suite = Suite.from_inputs(
-        ["server=server.py"],
-        jobs=2,
-        context=TestPathContext(working_dir=tmp_path),
-    )
-
-    assert suite.options.jobs == 2
+    with pytest.raises(ValueError, match="Jobs are not supported"):
+        Suite.from_inputs(
+            ["server=server.py"],
+            jobs=2,
+            context=TestPathContext(working_dir=tmp_path),
+        )
 
 
 def test_suite_from_inputs_raises_when_no_strategy_matches(monkeypatch):
@@ -282,31 +290,77 @@ def test_test_suite_runs_each_test_in_order(capsys, tmp_path):
     )
 
 
-def test_suite_selects_runner_for_each_parallelism_strategy():
-    """Suite dispatches each parallelism value to its matching runner."""
-    suite = Suite(SuiteOpts(), [])
+def test_suite_job_splits_tests_into_contiguous_jobs():
+    """Multiple jobs receive balanced contiguous test groups."""
+    tests = [
+        Test(TestPath(f"test-{index}.py", f"test-{index}.py", None, "test.py"))
+        for index in range(5)
+    ]
 
-    assert suite._runner_for(None) == suite._run_sequential
-    assert suite._runner_for(SuiteParallelism.REPEATED) == suite._run_repeated
-    assert suite._runner_for(SuiteParallelism.DISTRIBUTED) == suite._run_distributed
-    assert suite._runner_for(SuiteParallelism.ROLED) == suite._run_roled
+    suite_jobs = SuiteJob.split(tests, jobs=2)
 
-
-@pytest.mark.parametrize(
-    "parallelism",
-    [
-        SuiteParallelism.REPEATED,
-        SuiteParallelism.DISTRIBUTED,
-        SuiteParallelism.ROLED,
-    ],
-)
-def test_suite_placeholder_runners_are_callable(parallelism):
-    """Placeholder strategies can be selected until their implementations land."""
-    Suite(SuiteOpts(parallelism=parallelism), []).run()
+    assert [suite_job.tests for suite_job in suite_jobs] == [tests[:3], tests[3:]]
 
 
-def test_roled_runner_starts_all_processes_before_joining(monkeypatch):
-    """Role execution starts one process per test before waiting for them."""
+def test_suite_job_does_not_split_one_job_or_one_test():
+    """One job or one test stays in a single group."""
+    test = Test(TestPath("test.py", "test.py", None, "test.py"))
+
+    assert SuiteJob.split([test], jobs=1) == [SuiteJob([test])]
+    assert SuiteJob.split([], jobs=2) == [SuiteJob([])]
+
+
+def test_suite_runs_jobs_in_parallel(monkeypatch):
+    """Multiple job groups start before any job is joined."""
+    events = []
+
+    class FakeProcess:
+        def __init__(self, target, args):
+            self.args = args
+            self.exitcode = 0
+
+        def start(self):
+            events.append(("start", self.args[0]))
+
+        def join(self):
+            events.append(("join", self.args[0]))
+
+    monkeypatch.setattr("ottu.suite.Process", FakeProcess)
+    tests = [
+        Test(TestPath(f"test-{index}.py", f"test-{index}.py", None, "test.py"))
+        for index in range(4)
+    ]
+
+    Suite(SuiteOpts(jobs=2), tests).run()
+
+    assert [event[0] for event in events] == ["start", "start", "join", "join"]
+
+
+def test_suite_raises_when_a_job_process_fails(monkeypatch):
+    """Suite execution reports a failed job process."""
+
+    class FakeProcess:
+        def __init__(self, target, args):
+            self.exitcode = 1
+
+        def start(self):
+            pass
+
+        def join(self):
+            pass
+
+    monkeypatch.setattr("ottu.suite.Process", FakeProcess)
+    tests = [
+        Test(TestPath(f"test-{index}.py", f"test-{index}.py", None, "test.py"))
+        for index in range(2)
+    ]
+
+    with pytest.raises(RuntimeError, match="jobs failed"):
+        Suite(SuiteOpts(jobs=2), tests).run()
+
+
+def test_suite_runs_plain_tests_directly(monkeypatch, capsys):
+    """A plain test with one device runs without a worker process."""
     events = []
 
     class FakeProcess:
@@ -322,12 +376,12 @@ def test_roled_runner_starts_all_processes_before_joining(monkeypatch):
             events.append(("join", self.args[0]))
 
     monkeypatch.setattr("ottu.suite.Process", FakeProcess)
-    first = Test(TestPath("first.py", "first.py", None, "first.py"), TestOpts())
-    second = Test(TestPath("second.py", "second.py", None, "second.py"), TestOpts())
+    test = Test(TestPath("first.py", "first.py", None, "first.py"), TestOpts())
 
-    Suite(SuiteOpts(SuiteParallelism.ROLED), [first, second]).run()
+    Suite(SuiteOpts(), [test]).run()
 
-    assert [event[0] for event in events] == ["start", "start", "join", "join"]
+    assert events == []
+    assert capsys.readouterr().out == "Running test: first.py\n"
 
 
 def test_roled_runner_starts_requested_process_count(monkeypatch):
@@ -355,17 +409,18 @@ def test_roled_runner_starts_requested_process_count(monkeypatch):
         options=TestOpts(role="client", count=1),
     )
 
-    Suite(SuiteOpts(SuiteParallelism.ROLED), [server, client]).run()
+    Suite(SuiteOpts(), [server, client]).run()
 
     assert [event[0] for event in events] == [
         "start",
         "start",
+        "join",
+        "join",
         "start",
         "join",
-        "join",
-        "join",
     ]
-    assert [event[1] for event in events[:3]] == [server, server, client]
+    assert [event[1] for event in events[:3]] == [server, server, server]
+    assert events[4][1] is client
 
 
 def test_repeated_runner_starts_requested_process_count(monkeypatch):
@@ -393,17 +448,10 @@ def test_repeated_runner_starts_requested_process_count(monkeypatch):
         TestOpts(count=1),
     )
 
-    Suite(SuiteOpts(SuiteParallelism.REPEATED), [first, second]).run()
+    Suite(SuiteOpts(), [first, second]).run()
 
-    assert [event[0] for event in events] == [
-        "start",
-        "start",
-        "start",
-        "join",
-        "join",
-        "join",
-    ]
-    assert [event[1] for event in events[:3]] == [first, first, second]
+    assert [event[0] for event in events] == ["start", "start", "join", "join"]
+    assert [event[1] for event in events[:2]] == [first, first]
 
 
 def test_repeated_runner_raises_when_a_process_fails(monkeypatch):
@@ -424,11 +472,11 @@ def test_repeated_runner_raises_when_a_process_fails(monkeypatch):
     monkeypatch.setattr("ottu.suite.Process", FakeProcess)
     test = Test(
         TestPath("failed.py", "failed.py", None, "failed.py"),
-        TestOpts(count=1),
+        TestOpts(count=2),
     )
 
-    with pytest.raises(RuntimeError, match="repeated tests failed"):
-        Suite(SuiteOpts(SuiteParallelism.REPEATED), [test]).run()
+    with pytest.raises(RuntimeError, match="test workers failed"):
+        Suite(SuiteOpts(), [test]).run()
 
 
 def test_roled_runner_raises_when_a_process_fails(monkeypatch):
@@ -447,20 +495,23 @@ def test_roled_runner_raises_when_a_process_fails(monkeypatch):
             pass
 
     monkeypatch.setattr("ottu.suite.Process", FakeProcess)
-    test = Test(TestPath("failed.py", "failed.py", None, "failed.py"))
+    test = Test(
+        TestPath("failed.py", "failed.py", None, "failed.py"),
+        TestOpts(role="server"),
+    )
 
-    with pytest.raises(RuntimeError, match="role tests failed"):
-        Suite(SuiteOpts(SuiteParallelism.ROLED), [test]).run()
+    with pytest.raises(RuntimeError, match="test workers failed"):
+        Suite(SuiteOpts(), [test]).run()
 
 
-def test_run_test_in_process_runs_the_given_test():
-    """The process target delegates execution to its test."""
+def test_suite_job_test_process_runs_the_given_test():
+    """The job's process target delegates execution to its test."""
     executed = []
 
     class FakeTest:
         def run(self):
             executed.append(True)
 
-    _run_test_in_process(FakeTest())
+    SuiteJob._run_test_in_process(FakeTest())
 
     assert executed == [True]
