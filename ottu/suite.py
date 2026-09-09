@@ -1,6 +1,5 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import Enum
 from glob import has_magic
 from multiprocessing import Process
 from re import fullmatch
@@ -8,28 +7,19 @@ from re import fullmatch
 from ottu.test import Test, TestOpts, TestPathContext, TestPathResolver
 
 
-def _run_test_in_process(test: Test) -> None:
-    """Run one test in a child process."""
-    test.run()
-
-
-class SuiteParallelism(Enum):
-    """Supported test execution strategies across devices."""
-
-    REPEATED = "repeated"
-    DISTRIBUTED = "distributed"
-    ROLED = "roled"
-
-
 @dataclass(frozen=True)
 class SuiteOpts:
     """Validated suite execution options."""
 
-    parallelism: SuiteParallelism | None = None
     jobs: int = 1
 
     def __post_init__(self) -> None:
-        if type(self.jobs) is not int or self.jobs < 1:
+        self._validate_jobs(self.jobs)
+
+    @staticmethod
+    def _validate_jobs(jobs: int) -> None:
+        """Reject non-integer and non-positive job limits."""
+        if type(jobs) is not int or jobs < 1:
             raise ValueError("Suite jobs must be a positive integer.")
 
 
@@ -97,6 +87,7 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
             context=context,
             exclude_test_selectors=exclude_test_selectors,
             count=count,
+            jobs=jobs,
         )
 
         tests: list[Test] = []
@@ -110,7 +101,7 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
                 context=context,
             )
             tests.extend(role_tests)
-        return Suite(SuiteOpts(SuiteParallelism.ROLED, jobs), tests)
+        return Suite(SuiteOpts(jobs), tests)
 
     @classmethod
     def _parse_inputs(
@@ -120,9 +111,10 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
+        jobs: int,
     ) -> RoleSuiteInputs:
         """Parse and validate role selectors and optional counts."""
-        cls._parse_invalid_ignore_arguments(exclude_test_selectors)
+        cls._parse_invalid_ignore_arguments(exclude_test_selectors, jobs)
         role_inputs = cls._parse_role_selectors(test_inputs, context)
         role_counts = cls._parse_role_counts(count, list(role_inputs))
         return RoleSuiteInputs(role_inputs, role_counts)
@@ -135,10 +127,13 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
     @staticmethod
     def _parse_invalid_ignore_arguments(
         exclude_test_selectors: Sequence[str],
+        jobs: int,
     ) -> None:
-        """Reject exclusions, which are unsupported for role-based tests."""
+        """Reject arguments that are unsupported for role-based tests."""
         if exclude_test_selectors:
             raise ValueError("Exclusions are not supported for role-based tests.")
+        if jobs != 1:
+            raise ValueError("Jobs are not supported for role-based tests.")
 
     @classmethod
     def _parse_role_selectors(
@@ -281,8 +276,57 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
             context=context,
             exclude_test_selectors=exclude_test_selectors,
         )
-        parallelism = SuiteParallelism.REPEATED if parsed_count > 1 else None
-        return Suite(SuiteOpts(parallelism, jobs), tests)
+        return Suite(SuiteOpts(jobs), tests)
+
+
+@dataclass(frozen=True)
+class SuiteJob:
+    """Run one group of tests within a suite job."""
+
+    tests: Sequence[Test]
+
+    def run(self) -> None:
+        """Run each test, creating workers for role or repeated tests."""
+        for test in self.tests:
+            if test.options.role is not None or test.options.count > 1:
+                self._run_test_workers(test)
+            else:
+                test.run()
+
+    @classmethod
+    def split(cls, tests: Sequence[Test], jobs: int) -> list["SuiteJob"]:
+        """Split tests into contiguous suite jobs."""
+        if jobs == 1 or len(tests) <= 1:
+            return [cls(list(tests))]
+
+        job_count = min(jobs, len(tests))
+        base_size, remainder = divmod(len(tests), job_count)
+        suite_jobs: list[SuiteJob] = []
+        start = 0
+        for job_index in range(job_count):
+            job_size = base_size + (job_index < remainder)
+            suite_jobs.append(cls(list(tests[start : start + job_size])))
+            start += job_size
+        return suite_jobs
+
+    @staticmethod
+    def _run_test_in_process(test: Test) -> None:
+        """Run one test in a child process."""
+        test.run()
+
+    @classmethod
+    def _run_test_workers(cls, test: Test) -> None:
+        """Run one worker per requested test replica."""
+        processes = [
+            Process(target=cls._run_test_in_process, args=(test,))
+            for _ in range(test.options.count)
+        ]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join()
+        if any(process.exitcode != 0 for process in processes):
+            raise RuntimeError("One or more test workers failed.")
 
 
 @dataclass
@@ -316,55 +360,18 @@ class Suite:
         raise ValueError("No suite input strategy supports the supplied inputs.")
 
     def run(self) -> None:
-        """Run the suite using the configured execution strategy."""
-        self._runner_for(self.options.parallelism)()
+        """Run the suite through the job and test worker layers."""
+        suite_jobs = SuiteJob.split(self.tests, self.options.jobs)
+        if len(suite_jobs) == 1:
+            suite_jobs[0].run()
+            return
 
-    def _runner_for(
-        self,
-        parallelism: SuiteParallelism | None,
-    ) -> Callable[[], None]:
-        """Return the runner for a suite parallelism strategy."""
-        runners = {
-            None: self._run_sequential,
-            SuiteParallelism.REPEATED: self._run_repeated,
-            SuiteParallelism.DISTRIBUTED: self._run_distributed,
-            SuiteParallelism.ROLED: self._run_roled,
-        }
-        return runners[parallelism]
-
-    def _run_sequential(self) -> None:
-        """Run each collected test in input order."""
-        for test in self.tests:
-            test.run()
-
-    def _run_repeated(self) -> None:
-        """Run each test in one child process per requested repeat."""
         processes = [
-            Process(target=_run_test_in_process, args=(test,))
-            for test in self.tests
-            for _ in range(test.options.count)
+            Process(target=SuiteJob.run, args=(suite_job,)) for suite_job in suite_jobs
         ]
         for process in processes:
             process.start()
         for process in processes:
             process.join()
         if any(process.exitcode != 0 for process in processes):
-            raise RuntimeError("One or more repeated tests failed.")
-
-    def _run_distributed(self) -> None:
-        """Distribute tests across available devices."""
-        pass
-
-    def _run_roled(self) -> None:
-        """Run each role-assigned test in its own child process."""
-        processes = [
-            Process(target=_run_test_in_process, args=(test,))
-            for test in self.tests
-            for _ in range(test.options.count)
-        ]
-        for process in processes:
-            process.start()
-        for process in processes:
-            process.join()
-        if any(process.exitcode != 0 for process in processes):
-            raise RuntimeError("One or more role tests failed.")
+            raise RuntimeError("One or more jobs failed.")
