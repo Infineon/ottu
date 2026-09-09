@@ -1,54 +1,94 @@
 """Tests for suite input classification."""
 
 import pytest
-from ottu.suite import Suite, SuiteOpts, SuiteParallelism, _run_test_in_process
-from ottu.test import Test, TestOpts, TestPath
+from ottu.suite import (
+    RoleSuiteInputStrategy,
+    StandardSuiteInputStrategy,
+    Suite,
+    SuiteInputStrategy,
+    SuiteOpts,
+    SuiteParallelism,
+    _run_test_in_process,
+)
+from ottu.test import Test, TestOpts, TestPath, TestPathContext
 
 
-def test_suite_opts_classifies_single_suite():
-    """Unqualified inputs are a single-device suite."""
-    options = SuiteOpts.from_inputs(["test_a.py", "test_b.py"])
-
-    assert options.parallelism is None
-    assert options.inputs == (
-        ("test_a.py", TestOpts()),
-        ("test_b.py", TestOpts()),
-    )
+def test_standard_input_strategy_matches_plain_inputs():
+    """The standard strategy accepts unqualified test selectors."""
+    assert StandardSuiteInputStrategy.matches(["test_a.py", "test_b.py"])
 
 
-def test_suite_opts_classifies_multi_role_inputs():
-    """Role-qualified inputs become role metadata and plain paths."""
-    options = SuiteOpts.from_inputs(["server=server.py", "client=client.py"])
+def test_suite_input_strategy_base_contract_is_not_implemented():
+    """The abstract strategy contract raises before a concrete implementation."""
+    with pytest.raises(NotImplementedError):
+        SuiteInputStrategy.matches(["test_a.py"])
+    with pytest.raises(NotImplementedError):
+        SuiteInputStrategy.from_inputs(
+            ["test_a.py"],
+            context=TestPathContext(),
+            exclude_test_selectors=(),
+            count=None,
+        )
 
-    assert options.parallelism is SuiteParallelism.ROLED
-    assert options.inputs == (
-        ("server.py", TestOpts(role="server")),
-        ("client.py", TestOpts(role="client")),
-    )
+
+def test_role_input_strategy_matches_role_inputs():
+    """The role strategy claims all role input attempts."""
+    assert RoleSuiteInputStrategy.matches(["server=server.py"])
+
+
+def test_role_input_strategy_rejects_exclusions():
+    """Role inputs reject exclusion selectors to keep parsing deterministic."""
+    with pytest.raises(ValueError, match="Exclusions are not supported"):
+        RoleSuiteInputStrategy.from_inputs(
+            ["server=server.py"],
+            context=TestPathContext(),
+            exclude_test_selectors=("skip.py",),
+            count=None,
+        )
 
 
 def test_classify_test_inputs_rejects_duplicate_roles():
     """Each role can have only one test input."""
     with pytest.raises(ValueError, match="provided more than once"):
-        SuiteOpts.from_inputs(["server=one.py", "server=two.py"])
+        RoleSuiteInputStrategy.from_inputs(
+            ["server=one.py", "server=two.py"],
+            context=TestPathContext(),
+            exclude_test_selectors=(),
+            count=None,
+        )
 
 
 def test_classify_test_inputs_rejects_mixed_roles_and_plain_inputs():
     """Role-qualified and unqualified inputs cannot be mixed."""
     with pytest.raises(ValueError, match="cannot be mixed"):
-        SuiteOpts.from_inputs(["server=server.py", "client.py"])
+        RoleSuiteInputStrategy.from_inputs(
+            ["server=server.py", "client.py"],
+            context=TestPathContext(),
+            exclude_test_selectors=(),
+            count=None,
+        )
 
 
 def test_suite_opts_rejects_extra_equals_in_role_input():
     """Role-qualified inputs must contain exactly one equals separator."""
     with pytest.raises(ValueError):
-        SuiteOpts.from_inputs(["server=server=server.py"])
+        RoleSuiteInputStrategy.from_inputs(
+            ["server=server=server.py"],
+            context=TestPathContext(),
+            exclude_test_selectors=(),
+            count=None,
+        )
 
 
 def test_suite_opts_rejects_malformed_role_input():
     """Role-qualified inputs require both a role and a test path."""
     with pytest.raises(ValueError, match="key=value"):
-        SuiteOpts.from_inputs(["server="])
+        RoleSuiteInputStrategy.from_inputs(
+            ["server="],
+            context=TestPathContext(),
+            exclude_test_selectors=(),
+            count=None,
+        )
 
 
 def test_suite_from_inputs_resolves_tests_and_sets_mode(tmp_path):
@@ -60,7 +100,7 @@ def test_suite_from_inputs_resolves_tests_and_sets_mode(tmp_path):
 
     suite = Suite.from_inputs(
         ["server=server.py", "client=client.py"],
-        working_dir=tmp_path,
+        context=TestPathContext(working_dir=tmp_path),
     )
 
     assert suite.options.parallelism is SuiteParallelism.ROLED
@@ -73,14 +113,33 @@ def test_suite_from_inputs_resolves_tests_and_sets_mode(tmp_path):
 
 
 def test_suite_from_inputs_sets_replicated_count(tmp_path):
-    """A numeric count selects replicated execution for plain tests."""
+    """A numeric count selects repeated execution for plain tests."""
     test_file = tmp_path / "check.py"
     test_file.touch()
 
-    suite = Suite.from_inputs(["check.py"], counts=("3",), working_dir=tmp_path)
+    suite = Suite.from_inputs(
+        ["check.py"], count="3", context=TestPathContext(working_dir=tmp_path)
+    )
 
-    assert suite.options.parallelism is SuiteParallelism.REPLICATED
+    assert suite.options.parallelism is SuiteParallelism.REPEATED
     assert [test.options.count for test in suite.tests] == [3]
+
+
+def test_suite_from_inputs_raises_when_no_strategy_matches(monkeypatch):
+    """The dispatcher fails loudly if every strategy rejects the raw inputs."""
+    monkeypatch.setattr(
+        RoleSuiteInputStrategy,
+        "matches",
+        classmethod(lambda cls, _: False),
+    )
+    monkeypatch.setattr(
+        StandardSuiteInputStrategy,
+        "matches",
+        classmethod(lambda cls, _: False),
+    )
+
+    with pytest.raises(ValueError, match="No suite input strategy supports"):
+        Suite.from_inputs([])
 
 
 def test_suite_from_inputs_sets_role_counts(tmp_path):
@@ -92,38 +151,65 @@ def test_suite_from_inputs_sets_role_counts(tmp_path):
 
     suite = Suite.from_inputs(
         ["server=server.py", "client=client.py"],
-        counts=("server=1", "client=4"),
-        working_dir=tmp_path,
+        count="server=1,client=4",
+        context=TestPathContext(working_dir=tmp_path),
     )
 
     assert [test.options.count for test in suite.tests] == [1, 4]
 
 
-@pytest.mark.parametrize("counts", [("1", "2"), ("server=2",), ("bad",), ("0",)])
-def test_suite_rejects_invalid_non_roled_counts(tmp_path, counts):
+def test_suite_from_inputs_applies_integer_count_to_all_roles(tmp_path):
+    """A single integer count applies to every role."""
+    server_test = tmp_path / "server.py"
+    client_test = tmp_path / "client.py"
+    server_test.touch()
+    client_test.touch()
+
+    suite = Suite.from_inputs(
+        ["server=server.py", "client=client.py"],
+        count="5",
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert [test.options.count for test in suite.tests] == [5, 5]
+
+
+@pytest.mark.parametrize("count", ["1,2", "server=2", "bad", "0"])
+def test_suite_rejects_invalid_non_roled_counts(tmp_path, count):
     """Non-role inputs reject multiple or role-qualified counts."""
     (tmp_path / "check.py").touch()
 
     with pytest.raises(ValueError):
-        Suite.from_inputs(["check.py"], counts=counts, working_dir=tmp_path)
+        Suite.from_inputs(
+            ["check.py"],
+            count=count,
+            context=TestPathContext(working_dir=tmp_path),
+        )
 
 
 @pytest.mark.parametrize(
-    "counts, message",
+    "count, message",
     [
-        (("server",), "role=count"),
-        (("other=2",), "Unknown role"),
-        (("server=bad",), "positive integer"),
-        (("server=0",), "positive integer"),
-        (("server=1", "server=2"), "more than once"),
+        ("server", "positive integer"),
+        ("other=2", "Unknown role"),
+        ("server=bad", "positive integer"),
+        ("server=0", "positive integer"),
+        ("server=1,server=2", "more than once"),
+        ("1,server=2", "cannot mix"),
+        ("1,2", "key=value"),
+        ("server=2=3", "key=value"),
     ],
 )
-def test_suite_rejects_invalid_role_counts(tmp_path, counts, message):
+def test_suite_rejects_invalid_role_counts(tmp_path, count, message):
     """Role counts must identify each role once with a positive integer."""
     (tmp_path / "server.py").touch()
 
     with pytest.raises(ValueError, match=message):
-        Suite.from_inputs(["server=server.py"], counts=counts, working_dir=tmp_path)
+        Suite.from_inputs(
+            ["server=server.py"],
+            count=count,
+            context=TestPathContext(working_dir=tmp_path),
+        )
 
 
 def test_suite_rejects_role_test_pattern(tmp_path):
@@ -131,7 +217,9 @@ def test_suite_rejects_role_test_pattern(tmp_path):
     (tmp_path / "server.py").touch()
 
     with pytest.raises(ValueError, match="not a pattern"):
-        Suite.from_inputs(["server=*.py"], working_dir=tmp_path)
+        Suite.from_inputs(
+            ["server=*.py"], context=TestPathContext(working_dir=tmp_path)
+        )
 
 
 def test_suite_rejects_role_test_directory(tmp_path):
@@ -139,7 +227,9 @@ def test_suite_rejects_role_test_directory(tmp_path):
     (tmp_path / "server_tests").mkdir()
 
     with pytest.raises(ValueError, match="exactly one test file"):
-        Suite.from_inputs(["server=server_tests"], working_dir=tmp_path)
+        Suite.from_inputs(
+            ["server=server_tests"], context=TestPathContext(working_dir=tmp_path)
+        )
 
 
 def test_test_suite_runs_each_test_in_order(capsys, tmp_path):
@@ -163,7 +253,7 @@ def test_suite_selects_runner_for_each_parallelism_strategy():
     suite = Suite(SuiteOpts(), [])
 
     assert suite._runner_for(None) == suite._run_sequential
-    assert suite._runner_for(SuiteParallelism.REPLICATED) == suite._run_replicated
+    assert suite._runner_for(SuiteParallelism.REPEATED) == suite._run_repeated
     assert suite._runner_for(SuiteParallelism.DISTRIBUTED) == suite._run_distributed
     assert suite._runner_for(SuiteParallelism.ROLED) == suite._run_roled
 
@@ -171,7 +261,7 @@ def test_suite_selects_runner_for_each_parallelism_strategy():
 @pytest.mark.parametrize(
     "parallelism",
     [
-        SuiteParallelism.REPLICATED,
+        SuiteParallelism.REPEATED,
         SuiteParallelism.DISTRIBUTED,
         SuiteParallelism.ROLED,
     ],
@@ -244,8 +334,8 @@ def test_roled_runner_starts_requested_process_count(monkeypatch):
     assert [event[1] for event in events[:3]] == [server, server, client]
 
 
-def test_replicated_runner_starts_requested_process_count(monkeypatch):
-    """Replicated execution starts one process per test replica."""
+def test_repeated_runner_starts_requested_process_count(monkeypatch):
+    """Repeated execution starts one process per test repeat."""
     events = []
 
     class FakeProcess:
@@ -269,7 +359,7 @@ def test_replicated_runner_starts_requested_process_count(monkeypatch):
         TestOpts(count=1),
     )
 
-    Suite(SuiteOpts(SuiteParallelism.REPLICATED), [first, second]).run()
+    Suite(SuiteOpts(SuiteParallelism.REPEATED), [first, second]).run()
 
     assert [event[0] for event in events] == [
         "start",
@@ -282,8 +372,8 @@ def test_replicated_runner_starts_requested_process_count(monkeypatch):
     assert [event[1] for event in events[:3]] == [first, first, second]
 
 
-def test_replicated_runner_raises_when_a_process_fails(monkeypatch):
-    """Replicated execution reports a failed child process."""
+def test_repeated_runner_raises_when_a_process_fails(monkeypatch):
+    """Repeated execution reports a failed child process."""
     processes = []
 
     class FakeProcess:
@@ -303,8 +393,8 @@ def test_replicated_runner_raises_when_a_process_fails(monkeypatch):
         TestOpts(count=1),
     )
 
-    with pytest.raises(RuntimeError, match="replicated tests failed"):
-        Suite(SuiteOpts(SuiteParallelism.REPLICATED), [test]).run()
+    with pytest.raises(RuntimeError, match="repeated tests failed"):
+        Suite(SuiteOpts(SuiteParallelism.REPEATED), [test]).run()
 
 
 def test_roled_runner_raises_when_a_process_fails(monkeypatch):
