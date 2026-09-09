@@ -130,7 +130,7 @@ class TestPathResolver:
         )
 
     @staticmethod
-    def validate_and_resolve_all(
+    def resolve_all(
         test_selectors: Sequence[str],
         context: TestPathContext,
         exclude_test_selectors: Sequence[str] = (),
@@ -210,24 +210,20 @@ class TestOpts:
     count: int = 1
 
     def __post_init__(self) -> None:
-        if self.role is not None and not self.role.strip():
-            raise ValueError("Role must not be empty.")
-        if isinstance(self.count, bool) or self.count < 1:
-            raise ValueError("Test count must be a positive integer.")
+        self._validate_role(self.role)
+        self._validate_count(self.count)
 
-    @classmethod
-    def from_values(
-        cls,
-        *,
-        role: str | None = None,
-        count: int | str = 1,
-    ) -> "TestOpts":
-        """Create validated options from user-facing values."""
-        try:
-            parsed_count = int(count)
-        except (TypeError, ValueError) as error:
-            raise ValueError("Test count must be a positive integer.") from error
-        return cls(role=role, count=parsed_count)
+    @staticmethod
+    def _validate_role(role: str | None) -> None:
+        """Reject empty or whitespace-only role names."""
+        if role is not None and not role.strip():
+            raise ValueError("Role must not be empty.")
+
+    @staticmethod
+    def _validate_count(count: int) -> None:
+        """Reject non-integer and non-positive counts."""
+        if type(count) is not int or count < 1:
+            raise ValueError("Test count must be a positive integer.")
 
 
 @dataclass
@@ -243,13 +239,13 @@ class Test:
         cls,
         test_selectors: Sequence[str],
         *,
-        options: TestOpts = TestOpts(),
         context: TestPathContext | None = None,
         exclude_test_selectors: Sequence[str] = (),
+        options: TestOpts = TestOpts(),
     ) -> list["Test"]:
         """Resolve test selectors and create tests with supplied options."""
         context = context or TestPathContext()
-        test_paths = TestPathResolver.validate_and_resolve_all(
+        test_paths = TestPathResolver.resolve_all(
             test_selectors,
             context,
             exclude_test_selectors=exclude_test_selectors,
