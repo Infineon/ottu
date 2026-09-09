@@ -238,6 +238,58 @@ def test_run_accepts_multiple_exclusions(project):
     assert str(excluded_second) not in result.output
 
 
+def test_run_accepts_one_standard_count(project):
+    """Run accepts a single non-repeated count option."""
+    root, _ = project
+    test_file = root / "check.py"
+    test_file.touch()
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--project-root",
+            str(root),
+            "--working-dir",
+            str(root),
+            "run",
+            "--count",
+            "3",
+            "check.py",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert str(test_file) in result.output
+
+
+def test_run_accepts_comma_separated_role_counts(project):
+    """Run accepts multiple role counts through one count option."""
+    root, _ = project
+    server_test = root / "server.py"
+    client_test = root / "client.py"
+    server_test.touch()
+    client_test.touch()
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--project-root",
+            str(root),
+            "--working-dir",
+            str(root),
+            "run",
+            "--count",
+            "server=2,client=3",
+            "server=server.py",
+            "client=client.py",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert str(server_test) in result.output
+    assert str(client_test) in result.output
+
+
 def test_run_rejects_missing_exclusion(project):
     """Run fails when an exclusion cannot be resolved."""
     root, _ = project

@@ -4,6 +4,7 @@ import click
 
 from ottu.cli.context import CliContext
 from ottu.suite import Suite
+from ottu.test import TestPathContext
 
 
 @click.command()
@@ -22,10 +23,8 @@ from ottu.suite import Suite
 @click.option(
     "--count",
     "-c",
-    "counts",
-    multiple=True,
     type=str,
-    help="Device count selector or role=count value.",
+    help="Device count or comma-separated role=count values.",
 )
 @click.pass_obj
 def run(
@@ -34,7 +33,7 @@ def run(
     tests_dir: str | None,
     pattern: str | None,
     exclude: tuple[str, ...],
-    counts: tuple[str, ...],
+    count: str | None,
 ) -> None:
     """Run the main command with the given CLI context."""
     test_inputs = () if pattern is not None else tests
@@ -45,12 +44,14 @@ def run(
 
     suite = Suite.from_inputs(
         test_inputs,
-        working_dir=cli_ctx.working_dir,
-        project_root=cli_ctx.project_root,
-        tests_dir=tests_dir,
-        pattern=pattern or "**/*",
+        context=TestPathContext(
+            working_dir=cli_ctx.working_dir,
+            project_root=cli_ctx.project_root,
+            tests_dir=tests_dir,
+            pattern=pattern or "**/*",
+        ),
         exclude=exclude,
-        counts=counts,
+        count=count,
     )
     click.echo(f"Resolved tests: {[test.test_path for test in suite.tests]}")
     suite.run()
