@@ -55,7 +55,7 @@ def test_resolve_all_expands_glob(tmp_path):
     (tests_dir / "b.py").touch()
     (tests_dir / "a.py").touch()
 
-    result = TestPathResolver.validate_and_resolve_all(
+    result = TestPathResolver.resolve_all(
         ["*.py"], TestPathContext(working_dir=tmp_path, tests_dir="tests")
     )
 
@@ -81,7 +81,7 @@ def test_validate_and_resolve_all_combines_inputs(tmp_path):
     first.touch()
     second.touch()
 
-    result = TestPathResolver.validate_and_resolve_all(
+    result = TestPathResolver.resolve_all(
         [
             "first.py",
             "second.py",
@@ -98,7 +98,7 @@ def test_validate_and_resolve_all_discovers_when_inputs_are_empty(tmp_path):
     test_file.parent.mkdir()
     test_file.touch()
 
-    result = TestPathResolver.validate_and_resolve_all(
+    result = TestPathResolver.resolve_all(
         [], TestPathContext(working_dir=tmp_path, pattern="**/*.py")
     )
 
@@ -111,7 +111,7 @@ def test_validate_and_resolve_all_discovers_for_no_selectors(tmp_path):
     test_file.parent.mkdir()
     test_file.touch()
 
-    result = TestPathResolver.validate_and_resolve_all(
+    result = TestPathResolver.resolve_all(
         [], TestPathContext(working_dir=tmp_path, pattern="*.py")
     )
 
@@ -129,7 +129,7 @@ def test_validate_and_resolve_all_excludes_matching_glob(tmp_path):
     excluded_first.touch()
     excluded_second.touch()
 
-    result = TestPathResolver.validate_and_resolve_all(
+    result = TestPathResolver.resolve_all(
         [],
         TestPathContext(working_dir=tmp_path, pattern="**/*.py"),
         exclude_test_selectors=("skip_*.py",),
@@ -215,7 +215,7 @@ def test_test_from_inputs_preserves_count_and_role(tmp_path):
 
 def test_test_opts_validates_role_and_count():
     """TestOpts stores valid role and count values."""
-    options = TestOpts.from_values(role="client", count="3")
+    options = TestOpts(role="client", count=3)
 
     assert options == TestOpts(role="client", count=3)
 
@@ -226,13 +226,13 @@ def test_test_opts_validates_role_and_count():
         {"role": "", "count": 1},
         {"role": "   ", "count": 1},
         {"role": None, "count": 0},
-        {"role": None, "count": "invalid"},
+        {"role": None, "count": -1},
     ],
 )
 def test_test_opts_rejects_invalid_values(options):
     """TestOpts rejects empty roles and invalid counts."""
     with pytest.raises(ValueError):
-        TestOpts.from_values(**options)
+        TestOpts(**options)
 
 
 def test_test_accepts_explicit_options(tmp_path):
