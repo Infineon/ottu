@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from glob import glob, has_magic
 from pathlib import Path
 
+from ottu.output import Output
+
 
 @dataclass(frozen=True)
 class TestPath:
@@ -254,4 +256,8 @@ class Test:
 
     def run(self) -> None:
         """Run one resolved test using the future framework backend."""
-        print(f"Running test: {self.test_path.absolute_path}")
+        try:
+            Output.print_test_result(self.test_path.file_name, True)
+        except Exception:
+            Output.print_test_result(self.test_path.file_name, False)
+            raise
