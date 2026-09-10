@@ -46,10 +46,6 @@ def run(
 ) -> None:
     """Run the main command with the given CLI context."""
     test_inputs = () if pattern is not None else tests
-    click.echo(f"Project root: {cli_ctx.project_root}")
-    click.echo(f"Working directory: {cli_ctx.working_dir}")
-    click.echo(f"Tests directory: {tests_dir}")
-    click.echo(f"Tests: {test_inputs}")
 
     suite = Suite.from_inputs(
         test_inputs,
@@ -63,5 +59,4 @@ def run(
         count=count,
         jobs=jobs,
     )
-    click.echo(f"Resolved tests: {[test.test_path for test in suite.tests]}")
     suite.run()
