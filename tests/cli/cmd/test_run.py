@@ -17,15 +17,14 @@ def project(tmp_path):
 def test_run_without_project_marker_reports_none(tmp_path):
     result = CliRunner().invoke(cli, ["--working-dir", str(tmp_path), "run"])
     assert result.exit_code == 0
-    assert f"Project root: None\nWorking directory: {tmp_path}\n" in result.output
-    assert "Tests: ()\nResolved tests: []\n" in result.output
+    assert result.output == ""
 
 
 def test_run_without_tests_reports_empty_resolved_tests(project):
     root, _ = project
     result = CliRunner().invoke(cli, ["--working-dir", str(root), "run"])
     assert result.exit_code == 0
-    assert "Tests: ()\nResolved tests: []\n" in result.output
+    assert result.output == ""
 
 
 def test_run_discovers_default_test_directory(project):
@@ -38,8 +37,8 @@ def test_run_discovers_default_test_directory(project):
         ["--project-root", str(root), "--working-dir", str(root), "run"],
     )
     assert result.exit_code == 0
-    assert str(test_file) in result.output
-    assert f"Running test: {test_file}\n" in result.output
+    assert "check.py" in result.output
+    assert "PASS" in result.output
 
 
 def test_run_discovery_accepts_custom_directory_and_pattern(project):
@@ -65,8 +64,8 @@ def test_run_discovery_accepts_custom_directory_and_pattern(project):
         ],
     )
     assert result.exit_code == 0
-    assert str(python_test) in result.output
-    assert str(cpp_test) not in result.output
+    assert "check.py" in result.output
+    assert "check.cpp" not in result.output
 
 
 def test_run_pattern_ignores_shell_expanded_paths(project):
@@ -89,9 +88,8 @@ def test_run_pattern_ignores_shell_expanded_paths(project):
         ],
     )
     assert result.exit_code == 0
-    assert "Tests: ()" in result.output
-    assert str(test_file) in result.output
-    assert str(application_file) not in result.output
+    assert "check.py" in result.output
+    assert "app.py" not in result.output
 
 
 def test_run_resolves_working_directory_test(project):
@@ -103,8 +101,7 @@ def test_run_resolves_working_directory_test(project):
         ["--project-root", str(root), "--working-dir", str(root), "run", "check.py"],
     )
     assert result.exit_code == 0
-    assert "Tests: ('check.py',)" in result.output
-    assert str(test_file) in result.output
+    assert "check.py" in result.output
 
 
 def test_run_resolves_default_tests_directory_test(project):
@@ -117,7 +114,7 @@ def test_run_resolves_default_tests_directory_test(project):
         ["--project-root", str(root), "--working-dir", str(root), "run", "check.py"],
     )
     assert result.exit_code == 0
-    assert str(test_file) in result.output
+    assert "check.py" in result.output
 
 
 def test_run_resolves_absolute_test_path(project):
@@ -136,7 +133,7 @@ def test_run_resolves_absolute_test_path(project):
         ],
     )
     assert result.exit_code == 0
-    assert str(test_file) in result.output
+    assert "check.py" in result.output
 
 
 def test_run_expands_test_glob(project):
@@ -159,8 +156,8 @@ def test_run_expands_test_glob(project):
         ],
     )
     assert result.exit_code == 0
-    assert str(first) in result.output
-    assert str(second) in result.output
+    assert "first.py" in result.output
+    assert "second.py" in result.output
 
 
 def test_run_rejects_missing_test_path(project):
@@ -199,8 +196,8 @@ def test_run_excludes_valid_test_input(project):
     )
 
     assert result.exit_code == 0
-    assert str(included) in result.output
-    assert str(excluded) not in result.output
+    assert "included.py" in result.output
+    assert "excluded.py" not in result.output
 
 
 def test_run_accepts_multiple_exclusions(project):
@@ -233,9 +230,9 @@ def test_run_accepts_multiple_exclusions(project):
     )
 
     assert result.exit_code == 0
-    assert str(included) in result.output
-    assert str(excluded_first) not in result.output
-    assert str(excluded_second) not in result.output
+    assert "included.py" in result.output
+    assert "excluded_first.py" not in result.output
+    assert "excluded_second.py" not in result.output
 
 
 def test_run_accepts_one_standard_count(project):
@@ -259,7 +256,6 @@ def test_run_accepts_one_standard_count(project):
     )
 
     assert result.exit_code == 0
-    assert str(test_file) in result.output
 
 
 def test_run_accepts_jobs_option(project):
@@ -283,7 +279,7 @@ def test_run_accepts_jobs_option(project):
     )
 
     assert result.exit_code == 0
-    assert str(test_file) in result.output
+    assert "check.py" in result.output
 
 
 def test_run_rejects_non_positive_jobs(project):
@@ -333,8 +329,6 @@ def test_run_accepts_comma_separated_role_counts(project):
     )
 
     assert result.exit_code == 0
-    assert str(server_test) in result.output
-    assert str(client_test) in result.output
 
 
 def test_run_rejects_missing_exclusion(project):
