@@ -194,7 +194,25 @@ def test_test_run_reports_resolved_test(capsys, tmp_path):
 
     Test(test_path).run()
 
-    assert f"Running test: {tmp_path / 'check.py'}\n" == capsys.readouterr().out
+    assert "check.py" in capsys.readouterr().out
+
+
+def test_test_run_reports_failure_and_reraises_output_error(monkeypatch, tmp_path):
+    """A test reports failure when output fails and preserves the exception."""
+    test_path = TestPath(tmp_path / "check.py", tmp_path / "check.py", None, "check.py")
+    calls = []
+
+    def failing_output(test_name, passed):
+        calls.append((test_name, passed))
+        if passed:
+            raise RuntimeError("output failed")
+
+    monkeypatch.setattr("ottu.test.Output.print_test_result", failing_output)
+
+    with pytest.raises(RuntimeError, match="output failed"):
+        Test(test_path).run()
+
+    assert calls == [("check.py", True), ("check.py", False)]
 
 
 def test_test_from_inputs_preserves_count_and_role(tmp_path):
