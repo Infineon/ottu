@@ -235,6 +235,7 @@ class Test:
 
     test_path: TestPath
     options: TestOpts = field(default_factory=TestOpts)
+    device: str | None = None
 
     @classmethod
     def from_inputs(
