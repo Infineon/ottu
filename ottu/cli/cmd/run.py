@@ -21,6 +21,12 @@ from ottu.test import TestPathContext
 )
 @click.option("--exclude", "-x", multiple=True, type=str, help="Tests to exclude.")
 @click.option(
+    "--device",
+    multiple=True,
+    type=str,
+    help="Device identifier or comma-separated device key=value values.",
+)
+@click.option(
     "--count",
     "-c",
     type=str,
@@ -41,6 +47,7 @@ def run(
     tests_dir: str | None,
     pattern: str | None,
     exclude: tuple[str, ...],
+    device: tuple[str, ...],
     count: str | None,
     jobs: int,
 ) -> None:
@@ -56,6 +63,7 @@ def run(
             pattern=pattern or "**/*",
         ),
         exclude=exclude,
+        devices=device,
         count=count,
         jobs=jobs,
     )
