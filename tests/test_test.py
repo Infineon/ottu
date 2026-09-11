@@ -265,6 +265,16 @@ def test_test_accepts_explicit_options(tmp_path):
     assert test.options.count == 2
 
 
+def test_test_stores_device_requirement(tmp_path):
+    """Test stores its device requirement independently from execution options."""
+    test_path = TestPath(tmp_path / "check.py", tmp_path / "check.py", None, "check.py")
+
+    test = Test(test_path, device="port=/dev/ttyUSB0")
+
+    assert test.device == "port=/dev/ttyUSB0"
+    assert test.options == TestOpts()
+
+
 def test_test_from_inputs_rejects_non_positive_count(tmp_path):
     """Test construction requires a positive replication count."""
     test_file = tmp_path / "check.py"
