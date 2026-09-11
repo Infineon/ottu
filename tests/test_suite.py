@@ -123,6 +123,127 @@ def test_suite_from_inputs_sets_replicated_count(tmp_path):
     assert [test.options.count for test in suite.tests] == [3]
 
 
+def test_suite_from_inputs_expands_tests_for_each_device(tmp_path):
+    """Suite construction creates one test for each test/device pair."""
+    first_test = tmp_path / "first.py"
+    second_test = tmp_path / "second.py"
+    first_test.touch()
+    second_test.touch()
+
+    suite = Suite.from_inputs(
+        ["first.py", "second.py"],
+        devices=("board-1", "port=/dev/ttyUSB0,baud=9600"),
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert len(suite.tests) == 4
+    assert [test.test_path.file_name for test in suite.tests] == [
+        "first.py",
+        "first.py",
+        "second.py",
+        "second.py",
+    ]
+    assert [test.device for test in suite.tests] == [
+        "board-1",
+        "port=/dev/ttyUSB0,baud=9600",
+        "board-1",
+        "port=/dev/ttyUSB0,baud=9600",
+    ]
+
+
+def test_suite_from_inputs_without_devices_keeps_one_test_per_file(tmp_path):
+    """Suite construction does not duplicate tests when no device is given."""
+    test_file = tmp_path / "check.py"
+    test_file.touch()
+
+    suite = Suite.from_inputs(
+        ["check.py"],
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert len(suite.tests) == 1
+    assert suite.tests[0].device is None
+
+
+def test_role_suite_from_inputs_broadcasts_one_unqualified_device(tmp_path):
+    """One unqualified device query is assigned to every role."""
+    (tmp_path / "server.py").touch()
+    (tmp_path / "client.py").touch()
+
+    suite = Suite.from_inputs(
+        ["server=server.py", "client=client.py"],
+        devices=("board-1",),
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert [test.device for test in suite.tests] == ["board-1", "board-1"]
+
+
+def test_role_suite_from_inputs_routes_role_qualified_devices(tmp_path):
+    """Role-qualified device queries are assigned to their matching roles."""
+    (tmp_path / "server.py").touch()
+    (tmp_path / "client.py").touch()
+
+    suite = Suite.from_inputs(
+        ["server=server.py", "client=client.py"],
+        devices=(
+            "role=server,port=/dev/ttyUSB0",
+            "role=client,port=/dev/ttyUSB1",
+        ),
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert [test.device for test in suite.tests] == [
+        "role=server,port=/dev/ttyUSB0",
+        "role=client,port=/dev/ttyUSB1",
+    ]
+
+
+@pytest.mark.parametrize(
+    "devices, message",
+    [
+        (("role=server,port=/dev/ttyUSB0",), "Missing device query"),
+        (
+            ("role=server,port=/dev/ttyUSB0", "role=server,port=/dev/ttyUSB1"),
+            "more than once",
+        ),
+        (
+            ("role=other,port=/dev/ttyUSB0", "role=client,port=/dev/ttyUSB1"),
+            "Unknown role",
+        ),
+        (("role=server,port=/dev/ttyUSB0", "board-1"), "cannot be mixed"),
+    ],
+)
+def test_role_suite_from_inputs_validates_role_qualified_devices(
+    tmp_path, devices, message
+):
+    """Role-qualified devices must cover the role inputs exactly once."""
+    (tmp_path / "server.py").touch()
+    (tmp_path / "client.py").touch()
+
+    with pytest.raises(ValueError, match=message):
+        Suite.from_inputs(
+            ["server=server.py", "client=client.py"],
+            devices=devices,
+            context=TestPathContext(working_dir=tmp_path),
+        )
+
+
+def test_parse_role_devices_rejects_query_matching_multiple_roles(monkeypatch):
+    """Role-device parsing rejects an ambiguous role match."""
+    monkeypatch.setattr(
+        RoleSuiteInputStrategy,
+        "_device_roles",
+        classmethod(lambda cls, device, roles: ("server", "client")),
+    )
+
+    with pytest.raises(ValueError, match="more than one role"):
+        RoleSuiteInputStrategy._parse_role_devices(
+            ("role=server,port=/dev/ttyUSB0",),
+            ("server", "client"),
+        )
+
+
 def test_suite_from_inputs_sets_jobs(tmp_path):
     """Suite construction preserves the requested job limit."""
     test_file = tmp_path / "check.py"
