@@ -39,6 +39,7 @@ class SuiteInputStrategy:
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
+        devices: Sequence[str] = (),
         jobs: int = 1,
     ) -> "Suite":
         """Parse, validate, and construct a suite from raw input values."""
@@ -54,6 +55,18 @@ class SuiteInputStrategy:
         TestOpts._validate_count(count)
         return count
 
+    @staticmethod
+    def _assign_devices(tests: Sequence[Test], devices: Sequence[str]) -> list[Test]:
+        """Create one test for every test and device combination."""
+        if not devices:
+            return list(tests)
+
+        return [
+            Test(test.test_path, options=test.options, device=device)
+            for test in tests
+            for device in devices
+        ]
+
 
 @dataclass(frozen=True)
 class RoleSuiteInputs:
@@ -61,6 +74,7 @@ class RoleSuiteInputs:
 
     selectors: dict[str, str]
     counts: dict[str, int]
+    devices: dict[str, tuple[str, ...]]
 
 
 class RoleSuiteInputStrategy(SuiteInputStrategy):
@@ -79,6 +93,7 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
+        devices: Sequence[str] = (),
         jobs: int = 1,
     ) -> "Suite":
         """Create a role-based suite with per-role test options."""
@@ -87,6 +102,7 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
             context=context,
             exclude_test_selectors=exclude_test_selectors,
             count=count,
+            devices=devices,
             jobs=jobs,
         )
 
@@ -100,8 +116,68 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
                 ),
                 context=context,
             )
-            tests.extend(role_tests)
+            tests.extend(
+                cls._assign_devices(role_tests, parsed_inputs.devices.get(role, ()))
+            )
         return Suite(SuiteOpts(jobs), tests)
+
+    @classmethod
+    def _parse_role_devices(
+        cls,
+        devices: Sequence[str],
+        roles: Sequence[str],
+    ) -> dict[str, tuple[str, ...]]:
+        """Route device queries to roles or broadcast one query to all roles."""
+        if not devices:
+            return {}
+        device_roles = {device: cls._device_roles(device, roles) for device in devices}
+        if len(devices) == 1 and not device_roles[devices[0]]:
+            return {role: tuple(devices) for role in roles}
+
+        role_devices: dict[str, str] = {}
+        for device in devices:
+            matching_roles = device_roles[device]
+            if not matching_roles:
+                raise ValueError(
+                    "Role-qualified device queries cannot be mixed with unqualified "
+                    "queries."
+                )
+            if len(matching_roles) > 1:
+                roles_text = ", ".join(matching_roles)
+                raise ValueError(
+                    f"Device query matches more than one role: {roles_text}."
+                )
+            device_role = matching_roles[0]
+            if device_role in role_devices:
+                raise ValueError(
+                    f"Device query for role '{device_role}' was provided "
+                    "more than once."
+                )
+            if device_role not in roles:
+                raise ValueError(f"Unknown role '{device_role}' in device query.")
+            role_devices[device_role] = device
+
+        missing_roles = set(roles) - set(role_devices)
+        if missing_roles:
+            missing = ", ".join(sorted(missing_roles))
+            raise ValueError(f"Missing device query for role(s): {missing}.")
+        return {role: (role_devices[role],) for role in roles}
+
+    @classmethod
+    def _device_roles(
+        cls,
+        device: str,
+        roles: Sequence[str],
+    ) -> tuple[str, ...]:
+        """Extract the explicitly qualified role from a device query."""
+        if "=" not in device:
+            return ()
+
+        device_parameters = cls._parse_unique_key_values(
+            tuple(parameter.strip() for parameter in device.split(","))
+        )
+        device_role = device_parameters.get("role")
+        return (device_role,) if device_role is not None else ()
 
     @classmethod
     def _parse_inputs(
@@ -111,13 +187,15 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
+        devices: Sequence[str],
         jobs: int,
     ) -> RoleSuiteInputs:
         """Parse and validate role selectors and optional counts."""
         cls._parse_invalid_ignore_arguments(exclude_test_selectors, jobs)
         role_inputs = cls._parse_role_selectors(test_inputs, context)
         role_counts = cls._parse_role_counts(count, list(role_inputs))
-        return RoleSuiteInputs(role_inputs, role_counts)
+        role_devices = cls._parse_role_devices(devices, list(role_inputs))
+        return RoleSuiteInputs(role_inputs, role_counts, role_devices)
 
     @staticmethod
     def _is_role_input(test_input: str) -> bool:
@@ -266,6 +344,7 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
+        devices: Sequence[str] = (),
         jobs: int = 1,
     ) -> "Suite":
         """Create a sequential or replicated suite from normal selectors."""
@@ -276,6 +355,7 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
             context=context,
             exclude_test_selectors=exclude_test_selectors,
         )
+        tests = cls._assign_devices(tests, devices)
         return Suite(SuiteOpts(jobs), tests)
 
 
@@ -344,6 +424,7 @@ class Suite:
         context: TestPathContext | None = None,
         exclude: Sequence[str] = (),
         count: str | None = None,
+        devices: Sequence[str] = (),
         jobs: int = 1,
     ) -> "Suite":
         """Select an input strategy and construct an executable suite."""
@@ -355,6 +436,7 @@ class Suite:
                     context=context,
                     exclude_test_selectors=exclude,
                     count=count,
+                    devices=devices,
                     jobs=jobs,
                 )
         raise ValueError("No suite input strategy supports the supplied inputs.")
