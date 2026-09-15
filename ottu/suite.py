@@ -4,6 +4,8 @@ from glob import has_magic
 from multiprocessing import Process
 from re import fullmatch
 
+from ottu.backend import Backend
+from ottu.result import TestResult, TestResultObserver
 from ottu.test import Test, TestOpts, TestPathContext, TestPathResolver
 
 
@@ -41,6 +43,8 @@ class SuiteInputStrategy:
         count: str | None,
         devices: Sequence[str] = (),
         jobs: int = 1,
+        backend: Backend | None = None,
+        observers: Sequence[TestResultObserver] = (),
     ) -> "Suite":
         """Parse, validate, and construct a suite from raw input values."""
         raise NotImplementedError
@@ -62,7 +66,13 @@ class SuiteInputStrategy:
             return list(tests)
 
         return [
-            Test(test.test_path, options=test.options, device=device)
+            Test(
+                test.test_path,
+                options=test.options,
+                device=device,
+                backend=test.backend,
+                observers=test.observers,
+            )
             for test in tests
             for device in devices
         ]
@@ -95,6 +105,8 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
         count: str | None,
         devices: Sequence[str] = (),
         jobs: int = 1,
+        backend: Backend | None = None,
+        observers: Sequence[TestResultObserver] = (),
     ) -> "Suite":
         """Create a role-based suite with per-role test options."""
         parsed_inputs = cls._parse_inputs(
@@ -115,6 +127,8 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
                     count=parsed_inputs.counts.get(role, 1),
                 ),
                 context=context,
+                backend=backend,
+                observers=observers,
             )
             tests.extend(
                 cls._assign_devices(role_tests, parsed_inputs.devices.get(role, ()))
@@ -346,6 +360,8 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
         count: str | None,
         devices: Sequence[str] = (),
         jobs: int = 1,
+        backend: Backend | None = None,
+        observers: Sequence[TestResultObserver] = (),
     ) -> "Suite":
         """Create a sequential or replicated suite from normal selectors."""
         parsed_count = cls._parse_count(count) if count else 1
@@ -354,6 +370,8 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
             options=TestOpts(count=parsed_count),
             context=context,
             exclude_test_selectors=exclude_test_selectors,
+            backend=backend,
+            observers=observers,
         )
         tests = cls._assign_devices(tests, devices)
         return Suite(SuiteOpts(jobs), tests)
@@ -365,13 +383,15 @@ class SuiteJob:
 
     tests: Sequence[Test]
 
-    def run(self) -> None:
+    def run(self) -> list[TestResult]:
         """Run each test, creating workers for role or repeated tests."""
+        results: list[TestResult] = []
         for test in self.tests:
             if test.options.role is not None or test.options.count > 1:
                 self._run_test_workers(test)
             else:
-                test.run()
+                results.append(test.run())
+        return results
 
     @classmethod
     def split(cls, tests: Sequence[Test], jobs: int) -> list["SuiteJob"]:
@@ -426,6 +446,8 @@ class Suite:
         count: str | None = None,
         devices: Sequence[str] = (),
         jobs: int = 1,
+        backend: Backend | None = None,
+        observers: Sequence[TestResultObserver] = (),
     ) -> "Suite":
         """Select an input strategy and construct an executable suite."""
         context = context or TestPathContext()
@@ -438,15 +460,16 @@ class Suite:
                     count=count,
                     devices=devices,
                     jobs=jobs,
+                    backend=backend,
+                    observers=observers,
                 )
         raise ValueError("No suite input strategy supports the supplied inputs.")
 
-    def run(self) -> None:
+    def run(self) -> list[TestResult]:
         """Run the suite through the job and test worker layers."""
         suite_jobs = SuiteJob.split(self.tests, self.options.jobs)
         if len(suite_jobs) == 1:
-            suite_jobs[0].run()
-            return
+            return suite_jobs[0].run()
 
         processes = [
             Process(target=SuiteJob.run, args=(suite_job,)) for suite_job in suite_jobs
@@ -457,3 +480,4 @@ class Suite:
             process.join()
         if any(process.exitcode != 0 for process in processes):
             raise RuntimeError("One or more jobs failed.")
+        return []
