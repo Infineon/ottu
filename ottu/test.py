@@ -4,7 +4,15 @@ from dataclasses import dataclass, field
 from glob import glob, has_magic
 from pathlib import Path
 
-from ottu.output import Output
+from ottu.backend import Backend
+from ottu.device import Device
+from ottu.result import (
+    TestOutput,
+    TestOutputParser,
+    TestResult,
+    TestResultObserver,
+    TestStatus,
+)
 
 
 @dataclass(frozen=True)
@@ -57,7 +65,7 @@ class TestPathResolver:
                         test_selector, context
                     )
                     for match in glob(str(candidate), recursive=True)
-                    if Path(match).is_file()
+                    if TestPathResolver._is_test_file(Path(match))
                 }
             )
             if not matched_files:
@@ -72,6 +80,19 @@ class TestPathResolver:
         resolved_path = TestPathResolver._find_input(test_selector, context)
         if resolved_path is None:
             raise ValueError(f"Test path '{test_selector}' does not exist.")
+        if resolved_path.is_dir():
+            test_files = sorted(
+                path
+                for path in resolved_path.iterdir()
+                if TestPathResolver._is_test_file(path)
+            )
+            if not test_files:
+                raise ValueError(
+                    f"Test directory '{test_selector}' contains no test files."
+                )
+            return [
+                TestPathResolver._describe_path(path, context) for path in test_files
+            ]
         return [TestPathResolver._describe_path(resolved_path, context)]
 
     @staticmethod
@@ -104,7 +125,7 @@ class TestPathResolver:
             for root in roots
             for directory in directory_names
             for match in glob(str(root / directory / pattern), recursive=True)
-            if Path(match).is_file()
+            if TestPathResolver._is_test_file(Path(match))
         }
         return [
             TestPathResolver._describe_path(match, context) for match in sorted(matches)
@@ -201,6 +222,11 @@ class TestPathResolver:
                 return candidate
         return None
 
+    @staticmethod
+    def _is_test_file(path: Path) -> bool:
+        """Return whether a path is a test file rather than an .exp companion."""
+        return path.is_file() and path.suffix != ".exp"
+
 
 @dataclass(frozen=True)
 class TestOpts:
@@ -236,6 +262,8 @@ class Test:
     test_path: TestPath
     options: TestOpts = field(default_factory=TestOpts)
     device: str | None = None
+    backend: Backend | None = None
+    observers: tuple[TestResultObserver, ...] = ()
 
     @classmethod
     def from_inputs(
@@ -245,6 +273,8 @@ class Test:
         context: TestPathContext | None = None,
         exclude_test_selectors: Sequence[str] = (),
         options: TestOpts = TestOpts(),
+        backend: Backend | None = None,
+        observers: Sequence[TestResultObserver] = (),
     ) -> list["Test"]:
         """Resolve test selectors and create tests with supplied options."""
         context = context or TestPathContext()
@@ -253,12 +283,49 @@ class Test:
             context,
             exclude_test_selectors=exclude_test_selectors,
         )
-        return [cls(test_path, options=options) for test_path in test_paths]
+        return [
+            cls(
+                test_path,
+                options=options,
+                backend=backend,
+                observers=tuple(observers),
+            )
+            for test_path in test_paths
+        ]
 
-    def run(self) -> None:
-        """Run one resolved test using the future framework backend."""
+    def run(self) -> TestResult:
+        """Run one resolved test and return its result."""
+        if self.backend is None:
+            raise ValueError("Test backend is required.")
+
+        device = Device.from_string(self.device) if self.device else Device({})
+        self._notify(TestStatus.CONNECTING)
+        connection = device.connect()
+        output = None
         try:
-            Output.print_test_result(self.test_path.file_name, True)
-        except Exception:
-            Output.print_test_result(self.test_path.file_name, False)
-            raise
+            self.backend.run(
+                self.test_path.absolute_path,
+                device,
+                observers=self.observers,
+            )
+            if connection is not None:
+                self._notify(TestStatus.EXECUTING)
+                output = TestOutputParser.from_test_path(
+                    self.test_path.absolute_path
+                ).parse(connection)
+        finally:
+            if connection is not None:
+                connection.close()
+        return self._notify(
+            output.status if output and output.status else TestStatus.PASSED,
+            output=output,
+        )
+
+    def _notify(
+        self, status: TestStatus, *, output: TestOutput | None = None
+    ) -> TestResult:
+        """Notify observers about a test status change."""
+        result = TestResult(self.test_path.file_name, status, output=output)
+        for observer in self.observers:
+            observer.result_changed(result)
+        return result
