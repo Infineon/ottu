@@ -1,6 +1,7 @@
 """Tests for suite input classification."""
 
 import pytest
+from ottu.backend import Backend
 from ottu.suite import (
     RoleSuiteInputStrategy,
     StandardSuiteInputStrategy,
@@ -9,7 +10,7 @@ from ottu.suite import (
     SuiteJob,
     SuiteOpts,
 )
-from ottu.test import Test, TestOpts, TestPath, TestPathContext
+from ottu.test import Test, TestOpts, TestPath, TestPathContext, TestPathResolver
 
 
 def test_standard_input_strategy_matches_plain_inputs():
@@ -389,23 +390,45 @@ def test_suite_rejects_role_test_directory(tmp_path):
     """Role tests must resolve to a file rather than a directory."""
     (tmp_path / "server_tests").mkdir()
 
-    with pytest.raises(ValueError, match="exactly one test file"):
+    with pytest.raises(ValueError, match="contains no test files"):
         Suite.from_inputs(
             ["server=server_tests"], context=TestPathContext(working_dir=tmp_path)
         )
 
 
-def test_test_suite_runs_each_test_in_order(capsys, tmp_path):
+def test_role_validation_rejects_non_file_resolved_path(monkeypatch, tmp_path):
+    """Role validation rejects a resolved path that is not a file."""
+    directory = tmp_path / "server_tests"
+    directory.mkdir()
+    resolved_path = TestPath(directory, directory, None, directory.name)
+    monkeypatch.setattr(
+        TestPathResolver,
+        "resolve",
+        staticmethod(lambda selector, context: [resolved_path]),
+    )
+
+    with pytest.raises(ValueError, match="exactly one test file"):
+        RoleSuiteInputStrategy._validate_role_test_files(
+            {"server": "server_tests"}, TestPathContext(working_dir=tmp_path)
+        )
+
+
+def test_test_suite_returns_each_test_in_order(tmp_path):
     """A suite iterates over all collected tests in order."""
     first = TestPath(tmp_path / "first.py", tmp_path / "first.py", None, "first.py")
     second = TestPath(tmp_path / "second.py", tmp_path / "second.py", None, "second.py")
+    backend = Backend.from_mapping({"program": "true"})
 
-    Suite(
+    results = Suite(
         SuiteOpts(),
-        [Test(first, TestOpts()), Test(second, TestOpts())],
+        [
+            Test(first, TestOpts(), backend=backend),
+            Test(second, TestOpts(), backend=backend),
+        ],
     ).run()
 
-    assert capsys.readouterr().out.count("PASS") == 2
+    assert [result.test_name for result in results] == ["first.py", "second.py"]
+    assert all(result.passed for result in results)
 
 
 def test_suite_job_splits_tests_into_contiguous_jobs():
@@ -478,7 +501,7 @@ def test_suite_raises_when_a_job_process_fails(monkeypatch):
         Suite(SuiteOpts(jobs=2), tests).run()
 
 
-def test_suite_runs_plain_tests_directly(monkeypatch, capsys):
+def test_suite_runs_plain_tests_directly(monkeypatch):
     """A plain test with one device runs without a worker process."""
     events = []
 
@@ -494,14 +517,19 @@ def test_suite_runs_plain_tests_directly(monkeypatch, capsys):
             events.append(("join", self.args[0]))
 
     monkeypatch.setattr("ottu.suite.Process", FakeProcess)
-    test = Test(TestPath("first.py", "first.py", None, "first.py"), TestOpts())
+    backend = Backend.from_mapping({"program": "true"})
+    test = Test(
+        TestPath("first.py", "first.py", None, "first.py"),
+        TestOpts(),
+        backend=backend,
+    )
 
-    Suite(SuiteOpts(), [test]).run()
+    results = Suite(SuiteOpts(), [test]).run()
 
     assert events == []
-    output = capsys.readouterr().out
-    assert "first.py" in output
-    assert "PASS" in output
+    assert [(result.test_name, result.passed) for result in results] == [
+        ("first.py", True)
+    ]
 
 
 def test_roled_runner_starts_requested_process_count(monkeypatch):
@@ -559,13 +587,16 @@ def test_repeated_runner_starts_requested_process_count(monkeypatch):
             events.append(("join", self.args[0]))
 
     monkeypatch.setattr("ottu.suite.Process", FakeProcess)
+    backend = Backend.from_mapping({"program": "true"})
     first = Test(
         TestPath("first.py", "first.py", None, "first.py"),
         TestOpts(count=2),
+        backend=backend,
     )
     second = Test(
         TestPath("second.py", "second.py", None, "second.py"),
         TestOpts(count=1),
+        backend=backend,
     )
 
     Suite(SuiteOpts(), [first, second]).run()
