@@ -2,7 +2,9 @@
 
 import click
 
+from ottu.backend import Backend
 from ottu.cli.context import CliContext
+from ottu.cli.output import CliOutput
 from ottu.suite import Suite
 from ottu.test import TestPathContext
 
@@ -40,6 +42,12 @@ from ottu.test import TestPathContext
     show_default=True,
     help="Maximum number of concurrent jobs.",
 )
+@click.option(
+    "--backend",
+    default="debug",
+    show_default=True,
+    help="Built-in backend name or project-local YAML path.",
+)
 @click.pass_obj
 def run(
     cli_ctx: CliContext,
@@ -50,10 +58,13 @@ def run(
     device: tuple[str, ...],
     count: str | None,
     jobs: int,
+    backend: str,
 ) -> None:
     """Run the main command with the given CLI context."""
     test_inputs = () if pattern is not None else tests
+    selected_backend = Backend.from_name(backend, project_root=cli_ctx.project_root)
 
+    cli_output = CliOutput()
     suite = Suite.from_inputs(
         test_inputs,
         context=TestPathContext(
@@ -66,5 +77,7 @@ def run(
         devices=device,
         count=count,
         jobs=jobs,
+        backend=selected_backend,
+        observers=(cli_output,),
     )
     suite.run()
