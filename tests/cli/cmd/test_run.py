@@ -331,11 +331,22 @@ def test_run_accepts_comma_separated_role_counts(project):
     assert result.exit_code == 0
 
 
-def test_run_accepts_repeated_devices(project):
+def test_run_accepts_repeated_devices(project, monkeypatch):
     """Run accepts repeated device selectors in either supported form."""
     root, _ = project
     test_file = root / "check.py"
     test_file.touch()
+    monkeypatch.setattr(
+        "ottu.device.SerialDeviceAccess.connect",
+        lambda self, device: type(
+            "Connection",
+            (),
+            {
+                "readline": lambda self: b"",
+                "close": lambda self: None,
+            },
+        )(),
+    )
 
     result = CliRunner().invoke(
         cli,
