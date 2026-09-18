@@ -8,7 +8,15 @@ from ottu.cli import cli
 @pytest.fixture
 def project(tmp_path):
     """Create a project tree with a .ottu marker at its root."""
-    (tmp_path / ".ottu").touch()
+    (tmp_path / ".ottu").write_text(
+        """version: 1
+test_dirs: [tests]
+test_include_patterns: ["**/*"]
+test_exclude_patterns: []
+backend: debug
+""",
+        encoding="utf-8",
+    )
     nested = tmp_path / "sub" / "deep"
     nested.mkdir(parents=True)
     return tmp_path, nested
@@ -34,14 +42,14 @@ def test_run_discovers_default_test_directory(project):
     test_file.touch()
     result = CliRunner().invoke(
         cli,
-        ["--project-root", str(root), "--working-dir", str(root), "run"],
+        ["--working-dir", str(root), "run"],
     )
     assert result.exit_code == 0
     assert "check.py" in result.output
     assert "PASS" in result.output
 
 
-def test_run_discovery_accepts_custom_directory_and_pattern(project):
+def test_run_discovery_uses_project_directory_and_pattern(project):
     root, _ = project
     custom_dir = root / "fixtures"
     custom_dir.mkdir()
@@ -49,44 +57,41 @@ def test_run_discovery_accepts_custom_directory_and_pattern(project):
     cpp_test = custom_dir / "check.cpp"
     python_test.touch()
     cpp_test.touch()
+    (root / ".ottu").write_text(
+        """version: 1
+test_dirs: [fixtures]
+test_include_patterns: ["**/*.py"]
+test_exclude_patterns: []
+backend: debug
+""",
+        encoding="utf-8",
+    )
     result = CliRunner().invoke(
         cli,
-        [
-            "--project-root",
-            str(root),
-            "--working-dir",
-            str(root),
-            "run",
-            "--tests-dir",
-            "fixtures",
-            "--pattern",
-            "**/*.py",
-        ],
+        ["--working-dir", str(root), "run"],
     )
     assert result.exit_code == 0
     assert "check.py" in result.output
     assert "check.cpp" not in result.output
 
 
-def test_run_pattern_ignores_shell_expanded_paths(project):
+def test_run_uses_project_pattern_for_discovery(project):
     root, _ = project
     application_file = root / "app.py"
     test_file = root / "tests" / "check.py"
     test_file.parent.mkdir()
     application_file.touch()
     test_file.touch()
-    result = CliRunner().invoke(
-        cli,
-        [
-            "--working-dir",
-            str(root),
-            "run",
-            "--pattern",
-            "**/*.py",
-            str(application_file),
-            str(test_file),
-        ],
+    (root / ".ottu").write_text(
+        """version: 1
+test_dirs: [tests]
+test_include_patterns: ["**/*.py"]
+test_exclude_patterns: []
+backend: debug
+""",
+        encoding="utf-8",
     )
+    result = CliRunner().invoke(cli, ["--working-dir", str(root), "run"])
     assert result.exit_code == 0
     assert "check.py" in result.output
     assert "app.py" not in result.output
@@ -98,7 +103,7 @@ def test_run_resolves_working_directory_test(project):
     test_file.touch()
     result = CliRunner().invoke(
         cli,
-        ["--project-root", str(root), "--working-dir", str(root), "run", "check.py"],
+        ["--working-dir", str(root), "run", "check.py"],
     )
     assert result.exit_code == 0
     assert "check.py" in result.output
@@ -111,7 +116,7 @@ def test_run_resolves_default_tests_directory_test(project):
     test_file.touch()
     result = CliRunner().invoke(
         cli,
-        ["--project-root", str(root), "--working-dir", str(root), "run", "check.py"],
+        ["--working-dir", str(root), "run", "check.py"],
     )
     assert result.exit_code == 0
     assert "check.py" in result.output
@@ -124,8 +129,6 @@ def test_run_resolves_absolute_test_path(project):
     result = CliRunner().invoke(
         cli,
         [
-            "--project-root",
-            str(root),
             "--working-dir",
             str(root),
             "run",
@@ -147,8 +150,6 @@ def test_run_expands_test_glob(project):
     result = CliRunner().invoke(
         cli,
         [
-            "--project-root",
-            str(root),
             "--working-dir",
             str(root),
             "run",
@@ -164,7 +165,7 @@ def test_run_rejects_missing_test_path(project):
     root, _ = project
     result = CliRunner().invoke(
         cli,
-        ["--project-root", str(root), "--working-dir", str(root), "run", "missing.py"],
+        ["--working-dir", str(root), "run", "missing.py"],
     )
     assert result.exit_code != 0
     assert isinstance(result.exception, ValueError)
@@ -183,13 +184,9 @@ def test_run_excludes_valid_test_input(project):
     result = CliRunner().invoke(
         cli,
         [
-            "--project-root",
-            str(root),
             "--working-dir",
             str(root),
             "run",
-            "--pattern",
-            "**/*.py",
             "--exclude",
             "excluded.py",
         ],
@@ -215,13 +212,9 @@ def test_run_accepts_multiple_exclusions(project):
     result = CliRunner().invoke(
         cli,
         [
-            "--project-root",
-            str(root),
             "--working-dir",
             str(root),
             "run",
-            "--pattern",
-            "**/*.py",
             "--exclude",
             "excluded_first.py",
             "--exclude",
@@ -244,8 +237,6 @@ def test_run_accepts_one_standard_count(project):
     result = CliRunner().invoke(
         cli,
         [
-            "--project-root",
-            str(root),
             "--working-dir",
             str(root),
             "run",
@@ -267,8 +258,6 @@ def test_run_accepts_jobs_option(project):
     result = CliRunner().invoke(
         cli,
         [
-            "--project-root",
-            str(root),
             "--working-dir",
             str(root),
             "run",
@@ -289,8 +278,6 @@ def test_run_rejects_non_positive_jobs(project):
     result = CliRunner().invoke(
         cli,
         [
-            "--project-root",
-            str(root),
             "--working-dir",
             str(root),
             "run",
@@ -316,8 +303,6 @@ def test_run_accepts_comma_separated_role_counts(project):
     result = CliRunner().invoke(
         cli,
         [
-            "--project-root",
-            str(root),
             "--working-dir",
             str(root),
             "run",
@@ -351,8 +336,6 @@ def test_run_accepts_repeated_devices(project, monkeypatch):
     result = CliRunner().invoke(
         cli,
         [
-            "--project-root",
-            str(root),
             "--working-dir",
             str(root),
             "run",
@@ -373,8 +356,6 @@ def test_run_rejects_missing_exclusion(project):
     result = CliRunner().invoke(
         cli,
         [
-            "--project-root",
-            str(root),
             "--working-dir",
             str(root),
             "run",
