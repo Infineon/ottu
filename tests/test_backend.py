@@ -177,24 +177,34 @@ def test_backend_rejects_invalid_command(command):
         Backend.from_mapping({"build": command})
 
 
-def test_backend_from_name_loads_builtin():
+def test_backend_loads_builtin():
     """A built-in backend can be selected by name."""
     backend = Backend.from_name("debug")
 
     assert backend.build == ("echo", "build", "{device}")
 
 
-def test_backend_from_name_loads_project_yaml(tmp_path):
-    """A backend name can point to a project-local YAML file."""
+def test_backend_loads_default_without_project_root():
+    backend = Backend.load()
+
+    assert backend.build == ("echo", "build", "{device}")
+
+
+def test_backend_loads_project_yaml(tmp_path):
+    """A backend reference can point to a project-local YAML file."""
+    (tmp_path / ".ottu").write_text(
+        "version: 1\nbackend: custom.yml\n",
+        encoding="utf-8",
+    )
     definition = tmp_path / "custom.yml"
     definition.write_text("program: echo program {device}\n", encoding="utf-8")
 
-    backend = Backend.from_name("custom.yml", project_root=tmp_path)
+    backend = Backend.load(project_root=tmp_path)
 
     assert backend.program == ("echo", "program", "{device}")
 
 
-def test_backend_from_name_rejects_unknown_backend():
-    """Unknown backend names fail with a useful error."""
+def test_backend_rejects_unknown_source():
+    """Unknown backend references fail with a useful error."""
     with pytest.raises(ValueError, match="Unknown backend 'missing'"):
         Backend.from_name("missing")
