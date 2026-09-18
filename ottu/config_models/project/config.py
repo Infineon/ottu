@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel
 
 from ottu.config_models.project.v1 import DotOttu
 
@@ -24,10 +23,12 @@ class ProjectConfig:
             values: dict[str, Any] = yaml.safe_load(config_file)
 
         version = values.get("version")
-        models: dict[int, type[BaseModel]] = {1: DotOttu}
+        if type(version) is not int:
+            raise ValueError(f"Unsupported .ottu schema version: {version}")
+        models: dict[int, type[DotOttu]] = {1: DotOttu}
         try:
             model = models[version]
-        except (KeyError, TypeError) as error:
+        except KeyError as error:
             raise ValueError(f"Unsupported .ottu schema version: {version}") from error
         return model.model_validate(values)
 
