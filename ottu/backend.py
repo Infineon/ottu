@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from ottu.backend_builtins import BACKEND_BUILTINS
+from ottu.config_models.project.config import ProjectConfig
 from ottu.result import TestResult, TestResultObserver, TestStatus
 
 
@@ -21,18 +22,23 @@ class Backend:
     program: tuple[str, ...] | None = None
 
     @classmethod
-    def from_name(
-        cls, name: str, *, project_root: str | Path | None = None
-    ) -> "Backend":
-        """Load a built-in backend or a project-local YAML backend."""
-        if name in BACKEND_BUILTINS:
-            return cls.from_mapping(BACKEND_BUILTINS[name])
-        path = Path(name)
+    def load(cls, project_root: str | Path | None = None) -> "Backend":
+        """Load the backend configured by a project configuration."""
+        source = ProjectConfig.from_project_root(project_root).backend
+
+        path = Path(source)
         if not path.is_absolute() and project_root is not None:
             path = Path(project_root) / path
-        if not path.is_file():
+        if path.is_file():
+            return cls.from_yaml(path)
+        return cls.from_name(source)
+
+    @classmethod
+    def from_name(cls, name: str) -> "Backend":
+        """Load a built-in backend by name."""
+        if name not in BACKEND_BUILTINS:
             raise ValueError(f"Unknown backend '{name}'.")
-        return cls.from_yaml(path)
+        return cls.from_mapping(BACKEND_BUILTINS[name])
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "Backend":
