@@ -2,9 +2,10 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from glob import glob, has_magic
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from ottu.backend import Backend
+from ottu.config_models.project.config import ProjectConfig
 from ottu.device import Device
 from ottu.result import (
     TestOutput,
@@ -34,10 +35,98 @@ class TestPathContext:
 
     __test__ = False
 
-    working_dir: str | Path | None = None
+    working_dir: str | Path = field(default_factory=Path.cwd)
     project_root: str | Path | None = None
-    tests_dir: str | Path | None = None
-    pattern: str = "**/*"
+    test_dirs: tuple[str | Path, ...] = ("test", "tests")
+    test_include_patterns: list[str] = field(default_factory=lambda: ["**/*"])
+    test_exclude_patterns: list[str] = field(default_factory=list)
+
+    @classmethod
+    def load(
+        cls,
+        working_dir: str | Path = Path.cwd(),
+        project_root: str | Path | None = None,
+    ) -> "TestPathContext":
+        project_config = ProjectConfig.from_project_root(project_root)
+        return cls(
+            working_dir=working_dir,
+            project_root=project_root,
+            test_dirs=project_config.test_dirs,
+            test_include_patterns=project_config.test_include_patterns,
+            test_exclude_patterns=project_config.test_exclude_patterns,
+        )
+
+    def __post_init__(self) -> None:
+        """Validate context arguments and normalize configured test directories."""
+        self._validate_working_dir()
+        self._validate_project_root()
+        self._validate_test_dirs()
+        self._validate_test_include_patterns()
+        self._validate_test_exclude_patterns()
+
+    def _validate_working_dir(self) -> None:
+        """Validate that the working directory is a directory when provided."""
+        if not Path(self.working_dir).is_dir():
+            raise ValueError(f"Working directory does not exist: {self.working_dir}")
+
+    def _validate_project_root(self) -> None:
+        """Validate that the project root is a directory when provided."""
+        if self.project_root is not None and not Path(self.project_root).is_dir():
+            raise ValueError(f"Project root does not exist: {self.project_root}")
+
+    def _validate_test_dirs(self) -> None:
+        """Validate and normalize configured test directories."""
+        if not self.test_dirs or any(
+            not str(test_dir).strip() for test_dir in self.test_dirs
+        ):
+            raise ValueError("Test directories must contain non-empty paths.")
+
+        roots = [
+            Path(self.working_dir),
+        ]
+        if self.project_root:
+            project_root = Path(self.project_root).resolve()
+            if project_root != roots[0].resolve():
+                roots.append(project_root)
+        existing_dirs = tuple(
+            test_dir
+            for test_dir in self.test_dirs
+            if any((root / test_dir).is_dir() for root in roots)
+        )
+        object.__setattr__(self, "test_dirs", existing_dirs)
+
+    def _validate_test_include_patterns(self) -> None:
+        """Validate include patterns and require at least one pattern."""
+        self._validate_patterns(
+            self.test_include_patterns,
+            "Test include patterns",
+            allow_empty=False,
+        )
+
+    def _validate_test_exclude_patterns(self) -> None:
+        """Validate optional exclude patterns."""
+        self._validate_patterns(
+            self.test_exclude_patterns,
+            "Test exclude patterns",
+            allow_empty=True,
+        )
+
+    @staticmethod
+    def _validate_patterns(
+        patterns: list[str], name: str, *, allow_empty: bool
+    ) -> None:
+        """Validate that patterns are non-empty relative glob patterns."""
+        if not allow_empty and not patterns:
+            raise ValueError(f"{name} must contain at least one pattern.")
+        for pattern in patterns:
+            if not isinstance(pattern, str) or not pattern.strip():
+                raise ValueError(f"{name} must contain non-empty strings.")
+            if Path(pattern).is_absolute() or PureWindowsPath(pattern).is_absolute():
+                raise ValueError(f"{name} must contain relative patterns: {pattern}")
+            if ".." in Path(pattern).parts:
+                raise ValueError(
+                    f"{name} must not escape its test directory: {pattern}"
+                )
 
 
 class TestPathResolver:
@@ -45,7 +134,7 @@ class TestPathResolver:
 
     Relative selectors are searched in the working directory, the project root
     when available, and the default ``test`` or ``tests`` directories under
-    those roots. A custom ``tests_dir`` can replace the default directories.
+    those roots. Custom ``test_dirs`` can replace the default directories.
     Absolute selectors are used directly, and glob patterns resolve to all
     matching files. Every resolved result contains absolute, working-directory
     relative, and project-root relative path representations when available.
@@ -55,6 +144,8 @@ class TestPathResolver:
     def resolve(
         test_selector: str,
         context: TestPathContext,
+        *,
+        allow_no_matches: bool = False,
     ) -> list[TestPath]:
         """Resolve one selector into one or more concrete test paths."""
         if has_magic(test_selector):
@@ -65,10 +156,10 @@ class TestPathResolver:
                         test_selector, context
                     )
                     for match in glob(str(candidate), recursive=True)
-                    if TestPathResolver._is_test_file(Path(match))
+                    if Path(match).is_file()
                 }
             )
-            if not matched_files:
+            if not matched_files and not allow_no_matches:
                 raise ValueError(
                     f"Test pattern '{test_selector}' did not match any files."
                 )
@@ -82,9 +173,7 @@ class TestPathResolver:
             raise ValueError(f"Test path '{test_selector}' does not exist.")
         if resolved_path.is_dir():
             test_files = sorted(
-                path
-                for path in resolved_path.iterdir()
-                if TestPathResolver._is_test_file(path)
+                path for path in resolved_path.iterdir() if path.is_file()
             )
             if not test_files:
                 raise ValueError(
@@ -104,28 +193,24 @@ class TestPathResolver:
         Discovery searches the configured test directory under the working
         directory and, when available, under the project root. It never
         searches either root directly. By default it searches ``test`` and
-        ``tests`` recursively. ``tests_dir`` selects a custom directory, and
-        ``pattern`` can restrict discovery by extension or any glob rule.
+        ``tests`` recursively. ``test_dirs`` selects custom directories, and
+        ``test_include_patterns`` can restrict discovery by extension or any
+        glob rule.
         """
-        working_path = Path(context.working_dir) if context.working_dir else Path.cwd()
+        working_path = Path(context.working_dir)
         project_path = (
             Path(context.project_root).resolve() if context.project_root else None
         )
-        tests_dir = context.tests_dir
-        pattern = context.pattern
         roots = [working_path]
         if project_path and project_path != working_path.resolve():
             roots.append(project_path)
-        directory_names = (
-            [Path(tests_dir)] if tests_dir else [Path("test"), Path("tests")]
-        )
-
         matches = {
             Path(match).resolve()
             for root in roots
-            for directory in directory_names
+            for directory in TestPathResolver._existing_test_dirs(context, root)
+            for pattern in context.test_include_patterns
             for match in glob(str(root / directory / pattern), recursive=True)
-            if TestPathResolver._is_test_file(Path(match))
+            if Path(match).is_file()
         }
         return [
             TestPathResolver._describe_path(match, context) for match in sorted(matches)
@@ -133,7 +218,7 @@ class TestPathResolver:
 
     @staticmethod
     def _describe_path(test_path: Path, context: TestPathContext) -> TestPath:
-        working_dir = Path(context.working_dir) if context.working_dir else Path.cwd()
+        working_dir = Path(context.working_dir)
         project_root = (
             Path(context.project_root).resolve() if context.project_root else None
         )
@@ -166,10 +251,15 @@ class TestPathResolver:
             for test_selector in test_selectors:
                 resolved_tests.extend(TestPathResolver.resolve(test_selector, context))
 
+        exclude_selectors = (*context.test_exclude_patterns, *exclude_test_selectors)
         excluded_paths = {
             path.absolute_path
-            for exclude_test_selector in exclude_test_selectors
-            for path in TestPathResolver.resolve(exclude_test_selector, context)
+            for exclude_test_selector in exclude_selectors
+            for path in TestPathResolver.resolve(
+                exclude_test_selector,
+                context,
+                allow_no_matches=True,
+            )
         }
         return [
             test_path
@@ -186,29 +276,41 @@ class TestPathResolver:
 
         Absolute selectors are used as-is. Relative selectors are checked from the
         working directory, the project root when available, and each root's
-        ``test`` and ``tests`` directories. A custom ``tests_dir`` replaces
+        ``test`` and ``tests`` directories. Custom ``test_dirs`` replace
         the default directory names.
         """
         input_path = Path(test_selector)
         if input_path.is_absolute():
             return [input_path]
 
-        working_dir = Path(context.working_dir) if context.working_dir else Path.cwd()
+        working_dir = Path(context.working_dir)
         project_root = (
             Path(context.project_root).resolve() if context.project_root else None
         )
         roots = [working_dir]
         if project_root:
             roots.append(project_root)
-        directory_names = (
-            [Path(context.tests_dir)]
-            if context.tests_dir
-            else [Path("test"), Path("tests")]
+        directory_names = TestPathResolver._existing_test_dirs(context, working_dir)
+        project_directories = (
+            TestPathResolver._existing_test_dirs(context, project_root)
+            if project_root
+            else []
         )
         return [root / input_path for root in roots] + [
             root / directory / input_path
-            for root in roots
-            for directory in directory_names
+            for root, directories in zip(roots, [directory_names, project_directories])
+            for directory in directories
+        ]
+
+    @staticmethod
+    def _existing_test_dirs(context: TestPathContext, root: Path | None) -> list[Path]:
+        """Return configured test directories that exist below a root."""
+        if root is None:
+            return []
+        return [
+            Path(test_dir)
+            for test_dir in context.test_dirs
+            if (root / test_dir).is_dir()
         ]
 
     @staticmethod
@@ -221,11 +323,6 @@ class TestPathResolver:
             if candidate.exists() and (candidate.is_file() or candidate.is_dir()):
                 return candidate
         return None
-
-    @staticmethod
-    def _is_test_file(path: Path) -> bool:
-        """Return whether a path is a test file rather than an .exp companion."""
-        return path.is_file() and path.suffix != ".exp"
 
 
 @dataclass(frozen=True)
