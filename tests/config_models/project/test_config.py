@@ -120,6 +120,14 @@ def test_project_config_rejects_unsupported_version(tmp_path):
         ProjectConfig.from_file(path)
 
 
+def test_project_config_rejects_non_integer_version(tmp_path):
+    path = tmp_path / ".ottu"
+    path.write_text("version: '1'\nbackend: debug\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported .ottu schema version: 1"):
+        ProjectConfig.from_file(path)
+
+
 def test_project_config_accepts_missing_test_directory(tmp_path):
     path = tmp_path / ".ottu"
     path.write_text(
