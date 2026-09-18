@@ -6,7 +6,8 @@ from re import fullmatch
 
 from ottu.backend import Backend
 from ottu.result import TestResult, TestResultObserver
-from ottu.test import Test, TestOpts, TestPathContext, TestPathResolver
+from ottu.test import Test, TestOpts
+from ottu.test_path import TestPathContext, TestPathResolver
 
 
 @dataclass(frozen=True)

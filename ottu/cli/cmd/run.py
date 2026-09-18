@@ -1,12 +1,14 @@
 """The ``ottu run`` command."""
 
+from pathlib import Path
+
 import click
 
 from ottu.backend import Backend
 from ottu.cli.context import CliContext
 from ottu.cli.output import CliOutput
 from ottu.suite import Suite
-from ottu.test import TestPathContext
+from ottu.test_path import TestPathContext
 
 
 @click.command()
@@ -47,7 +49,7 @@ def run(
     suite = Suite.from_inputs(
         tests,
         context=TestPathContext.load(
-            working_dir=cli_ctx.working_dir,
+            working_dir=cli_ctx.working_dir or Path.cwd(),
             project_root=cli_ctx.project_root,
         ),
         exclude=exclude,

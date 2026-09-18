@@ -44,7 +44,7 @@ class TestPathContext:
         return cls(
             working_dir=working_dir,
             project_root=project_root,
-            test_dirs=project_config.test_dirs,
+            test_dirs=tuple(project_config.test_dirs),
             test_include_patterns=project_config.test_include_patterns,
             test_exclude_patterns=project_config.test_exclude_patterns,
         )
