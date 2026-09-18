@@ -12,12 +12,10 @@ class CliContext:
     working_dir: Path | None = None
 
     @classmethod
-    def discover(
-        cls, start: Path | str | None = None, working_dir: Path | str | None = None
-    ) -> "CliContext":
-        """Resolve CLI state from optional project and working directories."""
-        project_root = cls.find_project_root(start)
+    def discover(cls, working_dir: Path | str | None = None) -> "CliContext":
+        """Resolve CLI state from the working directory."""
         resolved_working_dir = Path(working_dir) if working_dir else Path.cwd()
+        project_root = cls.find_project_root(resolved_working_dir)
         return cls(project_root=project_root, working_dir=resolved_working_dir)
 
     @staticmethod
@@ -26,7 +24,7 @@ class CliContext:
         start_path = Path(start) if start else Path.cwd()
         current = start_path
         while current != current.parent:
-            if (current / ".ottu").exists():
+            if (current / ".ottu").is_file():
                 return current
             current = current.parent
         return None
