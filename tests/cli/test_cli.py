@@ -39,13 +39,12 @@ def test_main(monkeypatch):
 
 
 def test_cli_options_create_context(tmp_path):
-    project_root = tmp_path
     working_dir = tmp_path / "work"
     working_dir.mkdir()
-    (project_root / ".ottu").touch()
+    (tmp_path / ".ottu").touch()
 
     with click.Context(cli) as context:
-        cli.callback.__wrapped__(context, str(project_root), str(working_dir))
+        cli.callback.__wrapped__(context, str(working_dir))
 
-    assert context.obj.project_root == project_root
+    assert context.obj.project_root == tmp_path
     assert context.obj.working_dir == working_dir
