@@ -1,5 +1,7 @@
 """Test path resolution tests."""
 
+from pathlib import Path
+
 import pytest
 from ottu.backend import Backend
 from ottu.device import Device, SerialDeviceAccess
@@ -28,14 +30,105 @@ def test_resolve_path_from_default_tests_directory(tmp_path):
     assert result[0].absolute_path == test_file
 
 
+def test_test_path_context_defaults_to_existing_test_directories(tmp_path):
+    (tmp_path / "tests").mkdir()
+
+    context = TestPathContext(working_dir=tmp_path)
+
+    assert context.test_dirs == ("tests",)
+
+
+def test_test_path_context_defaults_to_all_files():
+    assert TestPathContext().test_include_patterns == ["**/*"]
+
+
+def test_test_path_context_defaults_to_no_exclude_patterns():
+    assert TestPathContext().test_exclude_patterns == []
+
+
+def test_test_path_context_loads_project_config(tmp_path):
+    (tmp_path / "checks").mkdir()
+    (tmp_path / ".ottu").write_text(
+        "version: 1\n"
+        "test_dirs: [checks]\n"
+        "test_include_patterns: ['**/*.py']\n"
+        "test_exclude_patterns: ['**/generated/**']\n"
+        "backend: debug\n",
+        encoding="utf-8",
+    )
+
+    context = TestPathContext.load(project_root=tmp_path)
+
+    assert context.test_dirs == ("checks",)
+    assert context.test_include_patterns == ["**/*.py"]
+    assert context.test_exclude_patterns == ["**/generated/**"]
+
+
+def test_test_path_context_defaults_working_directory_to_current_directory():
+    assert TestPathContext().working_dir == Path.cwd()
+
+
+def test_test_path_context_rejects_missing_working_directory(tmp_path):
+    with pytest.raises(ValueError, match="Working directory does not exist"):
+        TestPathContext(working_dir=tmp_path / "missing")
+
+
+def test_test_path_context_rejects_missing_project_root(tmp_path):
+    with pytest.raises(ValueError, match="Project root does not exist"):
+        TestPathContext(project_root=tmp_path / "missing")
+
+
+@pytest.mark.parametrize("test_dirs", [(), ("",)])
+def test_test_path_context_rejects_empty_test_directories(test_dirs):
+    with pytest.raises(ValueError, match="Test directories"):
+        TestPathContext(test_dirs=test_dirs)
+
+
+@pytest.mark.parametrize("patterns", [[], ["  "]])
+def test_test_path_context_rejects_empty_include_patterns(patterns):
+    with pytest.raises(ValueError, match="Test include patterns"):
+        TestPathContext(test_include_patterns=patterns)
+
+
+@pytest.mark.parametrize("patterns", [[""], ["/tmp/*.ino"], ["../*.ino"]])
+def test_test_path_context_rejects_invalid_include_patterns(patterns):
+    with pytest.raises(ValueError, match="Test include patterns"):
+        TestPathContext(test_include_patterns=patterns)
+
+
+@pytest.mark.parametrize("patterns", [[""], ["/tmp/*.ino"], ["../*.ino"]])
+def test_test_path_context_rejects_invalid_exclude_patterns(patterns):
+    with pytest.raises(ValueError, match="Test exclude patterns"):
+        TestPathContext(test_exclude_patterns=patterns)
+
+
+def test_test_path_context_keeps_directory_existing_under_project_root(tmp_path):
+    project_root = tmp_path / "project"
+    working_dir = project_root / "work"
+    (project_root / "tests").mkdir(parents=True)
+    working_dir.mkdir()
+
+    context = TestPathContext(working_dir=working_dir, project_root=project_root)
+
+    assert context.test_dirs == ("tests",)
+
+
+def test_existing_test_dirs_returns_empty_for_missing_root(tmp_path):
+    context = TestPathContext(working_dir=tmp_path)
+
+    assert TestPathResolver._existing_test_dirs(context, None) == []
+
+
 def test_resolve_path_with_project_relative_form(tmp_path):
     test_file = tmp_path / "tests" / "check.py"
     test_file.parent.mkdir()
     test_file.touch()
+    working_dir = tmp_path / "work"
+    working_dir.mkdir()
 
     result = TestPathResolver.resolve(
         "check.py",
-        TestPathContext(working_dir=tmp_path / "work", project_root=tmp_path),
+        TestPathContext(working_dir=working_dir, project_root=tmp_path),
     )
 
     assert result[0].project_root_relative_path == test_file.relative_to(tmp_path)
@@ -59,23 +152,23 @@ def test_resolve_all_expands_glob(tmp_path):
     (tests_dir / "a.py").touch()
 
     result = TestPathResolver.resolve_all(
-        ["*.py"], TestPathContext(working_dir=tmp_path, tests_dir="tests")
+        ["*.py"], TestPathContext(working_dir=tmp_path, test_dirs=("tests",))
     )
 
     assert [entry.file_name for entry in result] == ["a.py", "b.py"]
 
 
-def test_resolve_all_excludes_expected_output_files_from_glob(tmp_path):
+def test_resolve_all_includes_all_files_from_glob(tmp_path):
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
     (tests_dir / "check.py").touch()
     (tests_dir / "check.py.exp").touch()
 
     result = TestPathResolver.resolve_all(
-        ["*"], TestPathContext(working_dir=tmp_path, tests_dir="tests")
+        ["*"], TestPathContext(working_dir=tmp_path, test_dirs=("tests",))
     )
 
-    assert [entry.file_name for entry in result] == ["check.py"]
+    assert [entry.file_name for entry in result] == ["check.py", "check.py.exp"]
 
 
 def test_resolve_directory_expands_child_test_files(tmp_path):
@@ -89,7 +182,10 @@ def test_resolve_directory_expands_child_test_files(tmp_path):
         "hello-universe", TestPathContext(working_dir=tmp_path)
     )
 
-    assert [entry.absolute_path for entry in result] == [test_file]
+    assert [entry.absolute_path for entry in result] == [
+        test_file,
+        test_file.with_suffix(".ino.exp"),
+    ]
 
 
 def test_resolve_empty_directory_raises(tmp_path):
@@ -136,7 +232,7 @@ def test_validate_and_resolve_all_discovers_when_inputs_are_empty(tmp_path):
     test_file.touch()
 
     result = TestPathResolver.resolve_all(
-        [], TestPathContext(working_dir=tmp_path, pattern="**/*.py")
+        [], TestPathContext(working_dir=tmp_path, test_include_patterns=["**/*.py"])
     )
 
     assert [entry.absolute_path for entry in result] == [test_file]
@@ -149,7 +245,7 @@ def test_validate_and_resolve_all_discovers_for_no_selectors(tmp_path):
     test_file.touch()
 
     result = TestPathResolver.resolve_all(
-        [], TestPathContext(working_dir=tmp_path, pattern="*.py")
+        [], TestPathContext(working_dir=tmp_path, test_include_patterns=["*.py"])
     )
 
     assert [entry.absolute_path for entry in result] == [test_file]
@@ -168,8 +264,44 @@ def test_validate_and_resolve_all_excludes_matching_glob(tmp_path):
 
     result = TestPathResolver.resolve_all(
         [],
-        TestPathContext(working_dir=tmp_path, pattern="**/*.py"),
+        TestPathContext(working_dir=tmp_path, test_include_patterns=["**/*.py"]),
         exclude_test_selectors=("skip_*.py",),
+    )
+
+    assert [entry.absolute_path for entry in result] == [included]
+
+
+def test_validate_and_resolve_all_applies_context_exclude_patterns(tmp_path):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    included = tests_dir / "keep.py"
+    excluded = tests_dir / "skip.py"
+    included.touch()
+    excluded.touch()
+
+    result = TestPathResolver.resolve_all(
+        [],
+        TestPathContext(
+            working_dir=tmp_path,
+            test_exclude_patterns=["skip.py"],
+        ),
+    )
+
+    assert [entry.absolute_path for entry in result] == [included]
+
+
+def test_validate_and_resolve_all_ignores_unmatched_exclude_glob(tmp_path):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    included = tests_dir / "keep.py"
+    included.touch()
+
+    result = TestPathResolver.resolve_all(
+        [],
+        TestPathContext(
+            working_dir=tmp_path,
+            test_exclude_patterns=["*.exp"],
+        ),
     )
 
     assert [entry.absolute_path for entry in result] == [included]
@@ -191,7 +323,7 @@ def test_discover_finds_files_recursively_in_default_tests_directory(tmp_path):
     assert [entry.absolute_path for entry in result] == [first, second]
 
 
-def test_discover_excludes_expected_output_files(tmp_path):
+def test_discover_includes_all_files(tmp_path):
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
     test_file = tests_dir / "check.py"
@@ -200,10 +332,10 @@ def test_discover_excludes_expected_output_files(tmp_path):
     expected_file.touch()
 
     result = TestPathResolver.discover(
-        TestPathContext(working_dir=tmp_path, pattern="**/*")
+        TestPathContext(working_dir=tmp_path, test_include_patterns=["**/*"])
     )
 
-    assert [entry.absolute_path for entry in result] == [test_file]
+    assert [entry.absolute_path for entry in result] == [test_file, expected_file]
 
 
 def test_discover_applies_custom_pattern_and_directory(tmp_path):
@@ -216,10 +348,32 @@ def test_discover_applies_custom_pattern_and_directory(tmp_path):
     cpp_test.touch()
 
     result = TestPathResolver.discover(
-        TestPathContext(working_dir=tmp_path, tests_dir="fixtures", pattern="**/*.py")
+        TestPathContext(
+            working_dir=tmp_path,
+            test_dirs=("fixtures",),
+            test_include_patterns=["**/*.py"],
+        )
     )
 
     assert [entry.absolute_path for entry in result] == [python_test]
+
+
+def test_discover_applies_multiple_include_patterns(tmp_path):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    python_test = tests_dir / "check.py"
+    cpp_test = tests_dir / "check.cpp"
+    python_test.touch()
+    cpp_test.touch()
+
+    result = TestPathResolver.discover(
+        TestPathContext(
+            working_dir=tmp_path,
+            test_include_patterns=["**/*.py", "**/*.cpp"],
+        )
+    )
+
+    assert [entry.absolute_path for entry in result] == [cpp_test, python_test]
 
 
 def test_discover_includes_project_root_tests(tmp_path):
@@ -233,7 +387,9 @@ def test_discover_includes_project_root_tests(tmp_path):
 
     result = TestPathResolver.discover(
         TestPathContext(
-            working_dir=work_dir, project_root=tmp_path / "project", pattern="*.py"
+            working_dir=work_dir,
+            project_root=tmp_path / "project",
+            test_include_patterns=["*.py"],
         )
     )
 
