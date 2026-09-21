@@ -6,7 +6,7 @@ BACKEND_BUILTINS = {
         "program": "arduino-cli upload {test_path} -b {name} --port {port} ",
     },
     "debug": {
-        "build": "echo build {device}",
-        "program": "echo program {device}",
+        "build": "sh -c 'sleep 3; echo build {device}'",
+        "program": "sh -c 'sleep 3; echo program {device}'",
     },
 }
