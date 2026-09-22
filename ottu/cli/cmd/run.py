@@ -61,4 +61,7 @@ def run(
         ),
         observers=(cli_output,),
     )
-    suite.run()
+    try:
+        suite.run()
+    finally:
+        cli_output.finish()
