@@ -1,14 +1,20 @@
 """Tests for suite input classification."""
 
+import queue
+
 import pytest
 from ottu.backend import Backend
+from ottu.result import TestResult, TestStatus
 from ottu.suite import (
     RoleSuiteInputStrategy,
     StandardSuiteInputStrategy,
     Suite,
     SuiteInputStrategy,
-    SuiteJob,
     SuiteOpts,
+    SuiteParallelObserver,
+    SuiteParallelResult,
+    _queued_test,
+    _QueueObserver,
 )
 from ottu.test import Test, TestOpts, TestPath, TestPathContext, TestPathResolver
 
@@ -431,24 +437,26 @@ def test_test_suite_returns_each_test_in_order(tmp_path):
     assert all(result.passed for result in results)
 
 
-def test_suite_job_splits_tests_into_contiguous_jobs():
+def test_suite_splits_tests_into_contiguous_jobs():
     """Multiple jobs receive balanced contiguous test groups."""
     tests = [
         Test(TestPath(f"test-{index}.py", f"test-{index}.py", None, "test.py"))
         for index in range(5)
     ]
+    options = SuiteOpts()
 
-    suite_jobs = SuiteJob.split(tests, jobs=2)
+    suite_jobs = Suite(options, tests).split(jobs=2)
 
     assert [suite_job.tests for suite_job in suite_jobs] == [tests[:3], tests[3:]]
 
 
-def test_suite_job_does_not_split_one_job_or_one_test():
+def test_suite_does_not_split_one_job_or_one_test():
     """One job or one test stays in a single group."""
     test = Test(TestPath("test.py", "test.py", None, "test.py"))
+    options = SuiteOpts()
 
-    assert SuiteJob.split([test], jobs=1) == [SuiteJob([test])]
-    assert SuiteJob.split([], jobs=2) == [SuiteJob([])]
+    assert Suite(options, [test]).split(jobs=1) == [Suite(options, [test])]
+    assert Suite(options, []).split(jobs=2) == [Suite(options, [])]
 
 
 def test_suite_runs_jobs_in_parallel(monkeypatch):
@@ -663,6 +671,138 @@ def test_suite_job_test_process_runs_the_given_test():
         def run(self):
             executed.append(True)
 
-    SuiteJob._run_test_in_process(FakeTest())
+    Suite._run_test_in_process(FakeTest())
 
     assert executed == [True]
+
+
+def test_suite_job_test_process_queues_the_given_test(monkeypatch):
+    """The job process target wraps tests when given an event queue."""
+    executed = []
+
+    class FakeTest:
+        def run(self):
+            executed.append(True)
+
+    class FakeQueuedTest:
+        def run(self):
+            executed.append(True)
+
+    monkeypatch.setattr(
+        "ottu.suite._queued_test",
+        lambda test, event_queue, label: FakeQueuedTest(),
+    )
+
+    Suite._run_test_in_process(FakeTest(), object(), "check.py [1]")
+
+    assert executed == [True]
+
+
+def test_queue_observer_publishes_labeled_result():
+    """The child queue observer wraps results with its execution label."""
+    queued = []
+
+    class FakeQueue:
+        def put(self, result):
+            queued.append(result)
+
+    result = TestResult("check.py", TestStatus.BUILDING)
+
+    _QueueObserver(FakeQueue(), "check.py [1]").result_changed(result)
+
+    assert queued == [SuiteParallelResult(result, "check.py [1]")]
+
+
+def test_run_job_queues_a_plain_test_result():
+    """A plain test queues its labeled result when given an event queue."""
+    published = []
+
+    class FakeQueue:
+        def put(self, result):
+            published.append(result)
+
+    backend = Backend.from_mapping({"program": "true"})
+    test = Test(
+        TestPath("check.py", "check.py", None, "check.py"),
+        TestOpts(),
+        backend=backend,
+    )
+
+    results = Suite(SuiteOpts(), [test]).run_job(FakeQueue())
+
+    assert results == []
+    assert published
+    assert all(item.execution_name == "check.py" for item in published)
+    assert published[-1].result.passed
+
+
+def test_queued_test_wraps_test_with_a_queue_observer():
+    """The queued test wrapper preserves fields and adds a queue observer."""
+    backend = Backend.from_mapping({"program": "true"})
+    test = Test(
+        TestPath("check.py", "check.py", None, "check.py"),
+        TestOpts(),
+        device="board-1",
+        backend=backend,
+    )
+
+    wrapped = _queued_test(test, object(), "check.py [1]")
+
+    assert wrapped.test_path is test.test_path
+    assert wrapped.options is test.options
+    assert wrapped.device == "board-1"
+    assert wrapped.backend is backend
+    assert len(wrapped.observers) == 1
+    assert isinstance(wrapped.observers[0], _QueueObserver)
+
+
+def test_suite_parallel_observer_tracks_registered_processes():
+    """The coordinator reports whether registered processes are running."""
+
+    class FakeProcess:
+        def __init__(self, running):
+            self.running = running
+
+        def is_alive(self):
+            return self.running
+
+    observer = SuiteParallelObserver()
+    observer.register_process(FakeProcess(False))
+    assert not observer.processes_running
+
+    observer.register_process(FakeProcess(True))
+    assert observer.processes_running
+
+
+def test_suite_parallel_observer_queues_labeled_result():
+    """Parallel observers forward labeled results to final observers."""
+
+    class FakeQueue:
+        def __init__(self, result):
+            self.result = result
+
+        def get_nowait(self):
+            if self.result is None:
+                raise queue.Empty
+            result = self.result
+            self.result = None
+            return result
+
+    class RecordingObserver:
+        def __init__(self):
+            self.results = []
+
+        def result_changed(self, result):
+            self.results.append(result)
+
+    result = TestResult("check.py", TestStatus.BUILDING)
+    recording_observer = RecordingObserver()
+    observer = SuiteParallelObserver(
+        (recording_observer,),
+        event_queue=FakeQueue(SuiteParallelResult(result, "check.py [1]")),
+    )
+    observer._notify()
+
+    assert recording_observer.results == [
+        TestResult("check.py [1]", TestStatus.BUILDING)
+    ]
