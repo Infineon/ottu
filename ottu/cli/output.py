@@ -27,7 +27,7 @@ class CliOutput:
         self._console = console or Console(file=sys.stdout)
         self._live: Live | None = None
         self._results: list[TestResult] = []
-        self._spinners: dict[tuple[str, str | None], Spinner] = {}
+        self._spinners: dict[tuple[str, str | None, str | None], Spinner] = {}
 
     @staticmethod
     def report(result: TestResult, *, console: Console | None = None) -> None:
@@ -49,14 +49,20 @@ class CliOutput:
         for result in results:
             cls.report(result, console=console)
 
-    def update(self, name: str, status: str, device: str | None = None) -> None:
-        result = TestResult(name, TestStatus(status), device=device)
-        result_key = (name, device)
+    def update(
+        self,
+        name: str,
+        status: str,
+        device: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
+        result = TestResult(name, TestStatus(status), device=device, job_id=job_id)
+        result_key = (name, device, job_id)
         result_index = next(
             (
                 index
                 for index, current in enumerate(self._results)
-                if (current.test_name, current.device) == result_key
+                if (current.test_name, current.device, current.job_id) == result_key
             ),
             None,
         )
@@ -85,7 +91,9 @@ class CliOutput:
                 self._live.start()
             else:
                 self._console.print(
-                    self._final_text(result.test_name, status, result.device)
+                    self._final_text(
+                        result.test_name, status, result.device, result.job_id
+                    )
                 )
             return
 
@@ -102,7 +110,7 @@ class CliOutput:
 
     def result_changed(self, result: TestResult) -> None:
         """Render a typed execution result event."""
-        self.update(result.test_name, result.status.value, result.device)
+        self.update(result.test_name, result.status.value, result.device, result.job_id)
 
     def _render_results(self) -> Table:
         table = Table.grid(padding=(0, 1))
@@ -111,20 +119,32 @@ class CliOutput:
         table.add_column(width=12, no_wrap=True)
         table.add_column(width=2, no_wrap=True)
         for result in self._results:
-            result_key = (result.test_name, result.device)
+            result_key = (result.test_name, result.device, result.job_id)
             spinner = self._spinners.get(result_key)
             status = self._status_text(result.status.value)
             table.add_row(
-                Text(result.test_name),
+                Text(self._display_name(result.test_name, result.job_id)),
                 Text(result.device or ""),
                 status,
                 spinner or "",
             )
         return table
 
+    @staticmethod
+    def _display_name(name: str, job_id: str | None) -> str:
+        """Combine a test name with its job id for display."""
+        return f"{name} [{job_id}]" if job_id is not None else name
+
     @classmethod
-    def _final_text(cls, name: str, status: str, device: str | None = None) -> Text:
-        text = Text(f"{name:<40} {device or '':<24} ")
+    def _final_text(
+        cls,
+        name: str,
+        status: str,
+        device: str | None = None,
+        job_id: str | None = None,
+    ) -> Text:
+        display_name = cls._display_name(name, job_id)
+        text = Text(f"{display_name:<40} {device or '':<24} ")
         text.append(status, style=cls._STATUS_COLORS[status])
         return text
 
