@@ -20,23 +20,15 @@ class TestOpts:
     __test__ = False
 
     role: str | None = None
-    count: int = 1
 
     def __post_init__(self) -> None:
         self._validate_role(self.role)
-        self._validate_count(self.count)
 
     @staticmethod
     def _validate_role(role: str | None) -> None:
         """Reject empty or whitespace-only role names."""
         if role is not None and not role.strip():
             raise ValueError("Role must not be empty.")
-
-    @staticmethod
-    def _validate_count(count: int) -> None:
-        """Reject non-integer and non-positive counts."""
-        if type(count) is not int or count < 1:
-            raise ValueError("Test count must be a positive integer.")
 
 
 @dataclass
