@@ -84,7 +84,7 @@ class Test:
             raise ValueError("Test backend is required.")
 
         device = Device.from_string(self.device) if self.device else Device({})
-        self._notify(TestStatus.CONNECTING)
+        self._notify(TestStatus.CONNECTING, device=device.get("device"))
         connection = device.connect()
         output = None
         try:
@@ -94,7 +94,7 @@ class Test:
                 observers=self.observers,
             )
             if connection is not None:
-                self._notify(TestStatus.EXECUTING)
+                self._notify(TestStatus.EXECUTING, device=device.get("device"))
                 output = TestOutputParser.from_test_path(
                     self.test_path.absolute_path
                 ).parse(connection)
@@ -104,13 +104,23 @@ class Test:
         return self._notify(
             output.status if output and output.status else TestStatus.PASSED,
             output=output,
+            device=device.get("device"),
         )
 
     def _notify(
-        self, status: TestStatus, *, output: TestOutput | None = None
+        self,
+        status: TestStatus,
+        *,
+        output: TestOutput | None = None,
+        device: str | None = None,
     ) -> TestResult:
         """Notify observers about a test status change."""
-        result = TestResult(self.test_path.file_name, status, output=output)
+        result = TestResult(
+            self.test_path.file_name,
+            status,
+            output=output,
+            device=device,
+        )
         for observer in self.observers:
             observer.result_changed(result)
         return result
