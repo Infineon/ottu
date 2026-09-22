@@ -133,6 +133,7 @@ class TestResult:
     output: TestOutput | None = None
     message: str | None = None
     device: str | None = None
+    job_id: str | None = None
 
     @property
     def passed(self) -> bool:
