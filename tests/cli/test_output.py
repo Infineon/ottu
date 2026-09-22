@@ -2,6 +2,7 @@
 
 from ottu.cli.output import CliOutput
 from ottu.result import TestResult, TestStatus
+from rich.text import Text
 
 
 def test_test_result_prints_pass(capsys):
@@ -50,6 +51,9 @@ def test_progress_keeps_spinner_across_execution_stages(monkeypatch):
             self.name = name
             self.style = style
 
+        def __rich_console__(self, console, options):
+            yield Text("spinner")
+
     class FakeLive:
         def __init__(self, spinner, **kwargs):
             self.spinner = spinner
@@ -69,18 +73,19 @@ def test_progress_keeps_spinner_across_execution_stages(monkeypatch):
 
     progress = CliOutput()
     progress.update("hello-world", "building")
-    spinner = progress._spinner
+    spinner = progress._spinners[("hello-world", None)]
     progress.update("hello-world", "flashing")
     progress.update("hello-world", "PASS")
+    progress.finish()
 
     assert spinner is not None
     assert spinner.name == "dots6"
-    assert progress._label is None
-    assert events[2][1].renderables[0].plain == f"{'hello-world':<40} flashing "
-    assert events[2][1].renderables[1] is spinner
+    assert progress._results[0].status.value == "PASS"
+    assert len(events[2][1].rows) == 1
     assert [event[0] for event in events] == [
         "create",
         "start",
+        "update",
         "update",
         "update",
         "stop",
@@ -92,6 +97,9 @@ def test_progress_stop_clears_active_spinner(monkeypatch):
         def __init__(self, name, *, style):
             self.name = name
             self.style = style
+
+        def __rich_console__(self, console, options):
+            yield Text("spinner")
 
     class FakeLive:
         def __init__(self, spinner, **kwargs):
@@ -115,9 +123,64 @@ def test_progress_stop_clears_active_spinner(monkeypatch):
     live = progress._live
 
     progress.update("check.py", "PASS")
+    progress.finish()
 
     assert live is not None
     assert live.stopped
     assert progress._live is None
-    assert progress._spinner is None
-    assert progress._label is None
+    assert progress._spinners == {}
+
+
+def test_progress_keeps_multiple_results_in_one_live_render(monkeypatch):
+    renders = []
+
+    class FakeLive:
+        def __init__(self, renderable, **kwargs):
+            renders.append(renderable)
+
+        def start(self):
+            pass
+
+        def update(self, renderable):
+            renders.append(renderable)
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr("ottu.cli.output.Live", FakeLive)
+
+    progress = CliOutput()
+    progress.update("first.py", "building")
+    progress.update("second.py", "flashing")
+
+    assert [result.test_name for result in progress._results] == [
+        "first.py",
+        "second.py",
+    ]
+    assert len(renders[-1].rows) == 2
+
+
+def test_progress_separates_same_test_by_device(monkeypatch):
+    class FakeLive:
+        def __init__(self, renderable, **kwargs):
+            self.renderable = renderable
+
+        def start(self):
+            pass
+
+        def update(self, renderable):
+            self.renderable = renderable
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr("ottu.cli.output.Live", FakeLive)
+
+    progress = CliOutput()
+    progress.update("check.py", "building", device="/dev/ttyUSB0")
+    progress.update("check.py", "building", device="/dev/ttyUSB1")
+
+    assert [(result.test_name, result.device) for result in progress._results] == [
+        ("check.py", "/dev/ttyUSB0"),
+        ("check.py", "/dev/ttyUSB1"),
+    ]
