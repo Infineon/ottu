@@ -81,6 +81,7 @@ def test_backend_notifies_observers_for_each_stage():
         ("hello-world.py", TestStatus.BUILDING),
         ("hello-world.py", TestStatus.FLASHING),
     ]
+    assert all(event.device is None for event in observer.events)
 
 
 def test_backend_loads_parametric_yaml(tmp_path):
@@ -117,7 +118,7 @@ def test_debug_backend_echoes_device_commands():
 
     assert commands == [
         (
-            ("echo", "build", "test-device"),
+            ("sh", "-c", "sleep 3; echo build test-device"),
             {
                 "cwd": None,
                 "check": True,
@@ -126,7 +127,7 @@ def test_debug_backend_echoes_device_commands():
             },
         ),
         (
-            ("echo", "program", "test-device"),
+            ("sh", "-c", "sleep 3; echo program test-device"),
             {
                 "cwd": None,
                 "check": True,
@@ -181,13 +182,13 @@ def test_backend_loads_builtin():
     """A built-in backend can be selected by name."""
     backend = Backend.from_name("debug")
 
-    assert backend.build == ("echo", "build", "{device}")
+    assert backend.build == ("sh", "-c", "sleep 3; echo build {device}")
 
 
 def test_backend_loads_default_without_project_root():
     backend = Backend.load()
 
-    assert backend.build == ("echo", "build", "{device}")
+    assert backend.build == ("sh", "-c", "sleep 3; echo build {device}")
 
 
 def test_backend_loads_project_yaml(tmp_path):
