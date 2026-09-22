@@ -231,40 +231,36 @@ def test_test_run_skips_output_for_name_only_device(monkeypatch, tmp_path):
     Test(test_path, backend=backend).run()
 
 
-def test_test_from_inputs_preserves_count_and_role(tmp_path):
-    """Test construction stores its role and replication count."""
+def test_test_from_inputs_preserves_role(tmp_path):
+    """Test construction stores its role."""
     test_file = tmp_path / "check.py"
     test_file.touch()
 
     tests = Test.from_inputs(
         ["check.py"],
-        options=TestOpts(role="client", count=3),
+        options=TestOpts(role="client"),
         context=TestPathContext(working_dir=tmp_path),
     )
 
-    assert [(test.options.role, test.options.count) for test in tests] == [
-        ("client", 3)
-    ]
+    assert [test.options.role for test in tests] == ["client"]
 
 
-def test_test_opts_validates_role_and_count():
-    """TestOpts stores valid role and count values."""
-    options = TestOpts(role="client", count=3)
+def test_test_opts_validates_role():
+    """TestOpts stores a valid role value."""
+    options = TestOpts(role="client")
 
-    assert options == TestOpts(role="client", count=3)
+    assert options == TestOpts(role="client")
 
 
 @pytest.mark.parametrize(
     "options",
     [
-        {"role": "", "count": 1},
-        {"role": "   ", "count": 1},
-        {"role": None, "count": 0},
-        {"role": None, "count": -1},
+        {"role": ""},
+        {"role": "   "},
     ],
 )
 def test_test_opts_rejects_invalid_values(options):
-    """TestOpts rejects empty roles and invalid counts."""
+    """TestOpts rejects empty roles."""
     with pytest.raises(ValueError):
         TestOpts(**options)
 
@@ -272,13 +268,12 @@ def test_test_opts_rejects_invalid_values(options):
 def test_test_accepts_explicit_options(tmp_path):
     """Test stores an explicit TestOpts object."""
     test_path = TestPath(tmp_path / "check.py", tmp_path / "check.py", None, "check.py")
-    options = TestOpts(role="client", count=2)
+    options = TestOpts(role="client")
 
     test = Test(test_path, options=options)
 
     assert test.options is options
     assert test.options.role == "client"
-    assert test.options.count == 2
 
 
 def test_test_stores_device_requirement(tmp_path):
@@ -289,16 +284,3 @@ def test_test_stores_device_requirement(tmp_path):
 
     assert test.device == "port=/dev/ttyUSB0"
     assert test.options == TestOpts()
-
-
-def test_test_from_inputs_rejects_non_positive_count(tmp_path):
-    """Test construction requires a positive replication count."""
-    test_file = tmp_path / "check.py"
-    test_file.touch()
-
-    with pytest.raises(ValueError, match="positive integer"):
-        Test.from_inputs(
-            ["check.py"],
-            options=TestOpts(count=0),
-            context=TestPathContext(working_dir=tmp_path),
-        )
