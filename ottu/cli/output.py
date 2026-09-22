@@ -2,13 +2,13 @@
 
 import sys
 
-from rich.columns import Columns
 from rich.console import Console
 from rich.live import Live
 from rich.spinner import Spinner
+from rich.table import Table
 from rich.text import Text
 
-from ottu.result import TestResult
+from ottu.result import TestResult, TestStatus
 
 
 class CliOutput:
@@ -26,8 +26,8 @@ class CliOutput:
     def __init__(self, *, console: Console | None = None) -> None:
         self._console = console or Console(file=sys.stdout)
         self._live: Live | None = None
-        self._spinner: Spinner | None = None
-        self._label: Text | None = None
+        self._results: list[TestResult] = []
+        self._spinners: dict[tuple[str, str | None], Spinner] = {}
 
     @staticmethod
     def report(result: TestResult, *, console: Console | None = None) -> None:
@@ -38,7 +38,8 @@ class CliOutput:
             if result.passed
             else "[bold red]FAIL[/bold red]"
         )
-        console.print(f"{result.test_name:<40} {status}")
+        device = result.device or ""
+        console.print(f"{result.test_name:<40} {device:<24} {status}")
 
     @classmethod
     def report_all(
@@ -48,52 +49,87 @@ class CliOutput:
         for result in results:
             cls.report(result, console=console)
 
-    def update(self, name: str, status: str) -> None:
-        if status in {"PASS", "FAIL"}:
-            if self._live is not None:
-                self._live.update(self._final_text(name, status))
-                self._live.stop()
-                self._live = None
-                self._spinner = None
-                self._label = None
+    def update(self, name: str, status: str, device: str | None = None) -> None:
+        result = TestResult(name, TestStatus(status), device=device)
+        result_key = (name, device)
+        result_index = next(
+            (
+                index
+                for index, current in enumerate(self._results)
+                if (current.test_name, current.device) == result_key
+            ),
+            None,
+        )
+        if result_index is None:
+            self._results.append(result)
+        else:
+            self._results[result_index] = result
+
+        if result.status in {TestStatus.PASSED, TestStatus.FAILED}:
+            self._spinners.pop(result_key, None)
+        else:
+            spinner = self._spinners.get(result_key)
+            if spinner is None:
+                spinner = Spinner("dots6", style=self._STATUS_COLORS.get(status))
+                self._spinners[result_key] = spinner
             else:
-                self._console.print(self._final_text(name, status))
-            return
+                spinner.style = self._STATUS_COLORS.get(status)
 
         if self._live is None:
-            self._spinner = Spinner(
-                "dots6",
-                style=self._STATUS_COLORS.get(status),
-            )
-            self._label = self._stage_text(name, status)
-            self._live = Live(
-                Columns([self._label, self._spinner], expand=False, padding=(0, 0)),
-                console=self._console,
-                refresh_per_second=5,
-            )
-            self._live.start()
-        else:
-            self._label = self._stage_text(name, status)
-            spinner = self._spinner
-            assert spinner is not None
-            spinner.style = self._STATUS_COLORS.get(status)
-            self._live.update(
-                Columns([self._label, spinner], expand=False, padding=(0, 0))
-            )
+            if self._spinners:
+                self._live = Live(
+                    self._render_results(),
+                    console=self._console,
+                    refresh_per_second=5,
+                )
+                self._live.start()
+            else:
+                self._console.print(
+                    self._final_text(result.test_name, status, result.device)
+                )
+            return
+
+        self._live.update(self._render_results())
+
+    def finish(self) -> None:
+        """Finalize the combined progress display after the suite completes."""
+        if self._live is None:
+            return
+        self._live.update(self._render_results())
+        self._live.stop()
+        self._live = None
+        self._spinners.clear()
 
     def result_changed(self, result: TestResult) -> None:
         """Render a typed execution result event."""
-        self.update(result.test_name, result.status.value)
+        self.update(result.test_name, result.status.value, result.device)
+
+    def _render_results(self) -> Table:
+        table = Table.grid(padding=(0, 1))
+        table.add_column(width=40, no_wrap=True)
+        table.add_column(width=24, no_wrap=True)
+        table.add_column(width=12, no_wrap=True)
+        table.add_column(width=2, no_wrap=True)
+        for result in self._results:
+            result_key = (result.test_name, result.device)
+            spinner = self._spinners.get(result_key)
+            status = self._status_text(result.status.value)
+            table.add_row(
+                Text(result.test_name),
+                Text(result.device or ""),
+                status,
+                spinner or "",
+            )
+        return table
 
     @classmethod
-    def _final_text(cls, name: str, status: str) -> Text:
-        text = Text(f"{name:<40} ")
+    def _final_text(cls, name: str, status: str, device: str | None = None) -> Text:
+        text = Text(f"{name:<40} {device or '':<24} ")
         text.append(status, style=cls._STATUS_COLORS[status])
         return text
 
     @classmethod
-    def _stage_text(cls, name: str, status: str) -> Text:
-        text = Text(f"{name:<40} ")
-        text.append(status, style=cls._STATUS_COLORS.get(status))
-        text.append(" ")
+    def _status_text(cls, status: str) -> Text:
+        text = Text()
+        text.append(status, style=cls._STATUS_COLORS[status])
         return text
