@@ -90,7 +90,12 @@ class Backend:
             command = tuple(
                 argument.format_map(variables) for argument in configured_command
             )
-            self._notify(observers, test_path, status)
+            self._notify(
+                observers,
+                test_path,
+                status,
+                device=variables.get("device") or None,
+            )
             run_command(
                 command,
                 cwd=working_dir,
@@ -104,10 +109,11 @@ class Backend:
         observers: Sequence[TestResultObserver],
         test_path: str | Path,
         status: TestStatus,
+        device: str | None = None,
     ) -> None:
         """Notify observers about a backend execution stage."""
         if not observers:
             return
-        result = TestResult(Path(test_path).name, status)
+        result = TestResult(Path(test_path).name, status, device=device)
         for observer in observers:
             observer.result_changed(result)
