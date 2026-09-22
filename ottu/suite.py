@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from glob import has_magic
-from multiprocessing import Process
+from multiprocessing import Process, Queue
+from queue import Empty
 from re import fullmatch
 
 from ottu.backend import Backend
@@ -46,7 +49,7 @@ class SuiteInputStrategy:
         jobs: int = 1,
         backend: Backend | None = None,
         observers: Sequence[TestResultObserver] = (),
-    ) -> "Suite":
+    ) -> Suite:
         """Parse, validate, and construct a suite from raw input values."""
         raise NotImplementedError
 
@@ -108,7 +111,7 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
         jobs: int = 1,
         backend: Backend | None = None,
         observers: Sequence[TestResultObserver] = (),
-    ) -> "Suite":
+    ) -> Suite:
         """Create a role-based suite with per-role test options."""
         parsed_inputs = cls._parse_inputs(
             test_inputs,
@@ -363,7 +366,7 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
         jobs: int = 1,
         backend: Backend | None = None,
         observers: Sequence[TestResultObserver] = (),
-    ) -> "Suite":
+    ) -> Suite:
         """Create a sequential or replicated suite from normal selectors."""
         parsed_count = cls._parse_count(count) if count else 1
         tests = Test.from_inputs(
@@ -376,58 +379,6 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
         )
         tests = cls._assign_devices(tests, devices)
         return Suite(SuiteOpts(jobs), tests)
-
-
-@dataclass(frozen=True)
-class SuiteJob:
-    """Run one group of tests within a suite job."""
-
-    tests: Sequence[Test]
-
-    def run(self) -> list[TestResult]:
-        """Run each test, creating workers for role or repeated tests."""
-        results: list[TestResult] = []
-        for test in self.tests:
-            if test.options.role is not None or test.options.count > 1:
-                self._run_test_workers(test)
-            else:
-                results.append(test.run())
-        return results
-
-    @classmethod
-    def split(cls, tests: Sequence[Test], jobs: int) -> list["SuiteJob"]:
-        """Split tests into contiguous suite jobs."""
-        if jobs == 1 or len(tests) <= 1:
-            return [cls(list(tests))]
-
-        job_count = min(jobs, len(tests))
-        base_size, remainder = divmod(len(tests), job_count)
-        suite_jobs: list[SuiteJob] = []
-        start = 0
-        for job_index in range(job_count):
-            job_size = base_size + (job_index < remainder)
-            suite_jobs.append(cls(list(tests[start : start + job_size])))
-            start += job_size
-        return suite_jobs
-
-    @staticmethod
-    def _run_test_in_process(test: Test) -> None:
-        """Run one test in a child process."""
-        test.run()
-
-    @classmethod
-    def _run_test_workers(cls, test: Test) -> None:
-        """Run one worker per requested test replica."""
-        processes = [
-            Process(target=cls._run_test_in_process, args=(test,))
-            for _ in range(test.options.count)
-        ]
-        for process in processes:
-            process.start()
-        for process in processes:
-            process.join()
-        if any(process.exitcode != 0 for process in processes):
-            raise RuntimeError("One or more test workers failed.")
 
 
 @dataclass
@@ -449,7 +400,7 @@ class Suite:
         jobs: int = 1,
         backend: Backend | None = None,
         observers: Sequence[TestResultObserver] = (),
-    ) -> "Suite":
+    ) -> Suite:
         """Select an input strategy and construct an executable suite."""
         context = context or TestPathContext()
         for strategy in (RoleSuiteInputStrategy, StandardSuiteInputStrategy):
@@ -468,17 +419,190 @@ class Suite:
 
     def run(self) -> list[TestResult]:
         """Run the suite through the job and test worker layers."""
-        suite_jobs = SuiteJob.split(self.tests, self.options.jobs)
-        if len(suite_jobs) == 1:
-            return suite_jobs[0].run()
+        distributed_suites = self.split(self.options.jobs)
+        if len(distributed_suites) == 1:
+            return distributed_suites[0].run_job()
 
+        observers = tuple(
+            observer for test in self.tests for observer in test.observers
+        )
+        coordinator = SuiteParallelObserver(observers)
         processes = [
-            Process(target=SuiteJob.run, args=(suite_job,)) for suite_job in suite_jobs
+            Process(
+                target=Suite.run_job,
+                args=(suite_job, coordinator.event_queue),
+            )
+            for suite_job in distributed_suites
         ]
+        self.run_parallel(processes, coordinator)
+        return []
+
+    def run_job(
+        self, event_queue: Queue[SuiteParallelResult] | None = None
+    ) -> list[TestResult]:
+        """Run each test, creating workers for role or repeated tests."""
+        results: list[TestResult] = []
+        for test in self.tests:
+            if test.options.role is not None or test.options.count > 1:
+                self._run_test_workers(test, event_queue=event_queue)
+            else:
+                if event_queue is None:
+                    results.append(test.run())
+                else:
+                    _queued_test(test, event_queue, test.test_path.file_name).run()
+        return results
+
+    @staticmethod
+    def _run_test_in_process(
+        test: Test,
+        event_queue: Queue[SuiteParallelResult] | None = None,
+        label: str = "",
+    ) -> None:
+        """Run one test in a child process."""
+        if event_queue is None:
+            test.run()
+        else:
+            _queued_test(test, event_queue, label).run()
+
+    @classmethod
+    def _run_test_workers(
+        cls, test: Test, *, event_queue: Queue[SuiteParallelResult] | None = None
+    ) -> None:
+        """Run one worker per requested test replica."""
+        coordinator = SuiteParallelObserver(test.observers, event_queue=event_queue)
+        processes = [
+            Process(
+                target=cls._run_test_in_process,
+                args=(
+                    test,
+                    coordinator.event_queue,
+                    f"{test.test_path.file_name} [{index + 1}]",
+                ),
+            )
+            for index in range(test.options.count)
+        ]
+        # Skip live draining when nested: a shared queue is already drained
+        # by an ancestor, and test.observers would just re-queue events.
+        cls.run_parallel(
+            processes,
+            coordinator,
+            live_drain=event_queue is None,
+            failure_message="One or more test workers failed.",
+        )
+
+    def split(self, jobs: int) -> list[Suite]:
+        """Split tests into contiguous suite jobs."""
+        if jobs == 1 or len(self.tests) <= 1:
+            return [self]
+
+        job_count = min(jobs, len(self.tests))
+        base_size, remainder = divmod(len(self.tests), job_count)
+        suite_jobs: list[Suite] = []
+        start = 0
+        for job_index in range(job_count):
+            job_size = base_size + (job_index < remainder)
+            suite_jobs.append(
+                Suite(self.options, list(self.tests[start : start + job_size]))
+            )
+            start += job_size
+        return suite_jobs
+
+    @staticmethod
+    def run_parallel(
+        processes: list[Process],
+        coordinator: SuiteParallelObserver,
+        *,
+        live_drain: bool = True,
+        failure_message: str = "One or more jobs failed.",
+    ) -> None:
+        for process in processes:
+            coordinator.register_process(process)
         for process in processes:
             process.start()
+        if live_drain:
+            while coordinator.processes_running:
+                coordinator._notify()
         for process in processes:
             process.join()
+        coordinator._notify()
         if any(process.exitcode != 0 for process in processes):
-            raise RuntimeError("One or more jobs failed.")
-        return []
+            raise RuntimeError(failure_message)
+
+
+@dataclass(frozen=True)
+class SuiteParallelResult:
+    """A test result annotated with its parallel execution label."""
+
+    result: TestResult
+    execution_name: str
+
+
+class _QueueObserver:
+    """Publish labeled child-process results to a parent queue."""
+
+    def __init__(self, event_queue: Queue[SuiteParallelResult], label: str) -> None:
+        self._event_queue = event_queue
+        self._label = label
+
+    def result_changed(self, result: TestResult) -> None:
+        """Queue one labeled result from a parallel test execution."""
+        self._event_queue.put(SuiteParallelResult(result, self._label))
+
+
+class SuiteParallelObserver:
+    """Coordinate parallel processes and forward their results."""
+
+    def __init__(
+        self,
+        observers: Sequence[TestResultObserver] = (),
+        *,
+        event_queue: Queue[SuiteParallelResult] | None = None,
+    ) -> None:
+        self._event_queue = event_queue if event_queue is not None else Queue()
+        self._observers = tuple(observers)
+        self._processes: list[Process] = []
+
+    @property
+    def event_queue(self) -> Queue[SuiteParallelResult]:
+        """Return the queue shared with child processes."""
+        return self._event_queue
+
+    @property
+    def processes_running(self) -> bool:
+        """Return whether any registered process is still running."""
+        return any(_process_is_alive(process) for process in self._processes)
+
+    def register_process(self, process: Process) -> None:
+        """Register a process whose events this observer will forward."""
+        self._processes.append(process)
+
+    def _notify(self) -> None:
+        """Drain queued results and notify the final observers."""
+        while True:
+            try:
+                parallel_result = self._event_queue.get_nowait()
+            except Empty:
+                return
+            result = replace(
+                parallel_result.result,
+                test_name=parallel_result.execution_name,
+            )
+            for observer in self._observers:
+                observer.result_changed(result)
+
+
+def _queued_test(
+    test: Test, event_queue: Queue[SuiteParallelResult], label: str
+) -> Test:
+    return Test(
+        test.test_path,
+        options=test.options,
+        device=test.device,
+        backend=test.backend,
+        observers=(_QueueObserver(event_queue, label),),
+    )
+
+
+def _process_is_alive(process: Process) -> bool:
+    is_alive = getattr(process, "is_alive", None)
+    return bool(is_alive and is_alive())
