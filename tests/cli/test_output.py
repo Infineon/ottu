@@ -73,7 +73,7 @@ def test_progress_keeps_spinner_across_execution_stages(monkeypatch):
 
     progress = CliOutput()
     progress.update("hello-world", "building")
-    spinner = progress._spinners[("hello-world", None)]
+    spinner = progress._spinners[("hello-world", None, None)]
     progress.update("hello-world", "flashing")
     progress.update("hello-world", "PASS")
     progress.finish()
