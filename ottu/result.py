@@ -132,6 +132,7 @@ class TestResult:
     status: TestStatus
     output: TestOutput | None = None
     message: str | None = None
+    device: str | None = None
 
     @property
     def passed(self) -> bool:
