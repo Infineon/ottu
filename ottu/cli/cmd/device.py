@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import click
-import yaml
 
 from ottu.cli.context import CliContext
 from ottu.device import Device, DeviceQuery
@@ -46,12 +45,7 @@ def query(
 ) -> None:
     """Print KEY for the devices in a device list that match the filters."""
     path = (cli_ctx.working_dir or Path.cwd()) / dev_list
-    try:
-        devices = Device.from_file(str(path))
-    except (OSError, ValueError, yaml.YAMLError) as error:
-        raise click.ClickException(
-            f"Cannot load device list '{path}': {error}"
-        ) from error
+    devices = Device.from_file(str(path))
 
     try:
         values = DeviceQuery.select(
