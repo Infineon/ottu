@@ -158,7 +158,7 @@ def test_suite_from_inputs_expands_tests_for_each_device(tmp_path):
 
     suite = Suite.from_inputs(
         ["first.py", "second.py"],
-        devices=("board-1", "port=/dev/ttyUSB0,baud=9600"),
+        devices=("board-1", "address=/dev/ttyUSB0"),
         context=TestPathContext(working_dir=tmp_path),
     )
 
@@ -171,9 +171,9 @@ def test_suite_from_inputs_expands_tests_for_each_device(tmp_path):
     ]
     assert [test.device for test in suite.tests] == [
         "board-1",
-        "port=/dev/ttyUSB0,baud=9600",
+        "address=/dev/ttyUSB0",
         "board-1",
-        "port=/dev/ttyUSB0,baud=9600",
+        "address=/dev/ttyUSB0",
     ]
 
 
@@ -232,32 +232,32 @@ def test_role_suite_from_inputs_routes_role_qualified_devices(tmp_path):
     suite = Suite.from_inputs(
         ["server=server.py", "client=client.py"],
         devices=(
-            "role=server,port=/dev/ttyUSB0",
-            "role=client,port=/dev/ttyUSB1",
+            "role=server,address=/dev/ttyUSB0",
+            "role=client,address=/dev/ttyUSB1",
         ),
         context=TestPathContext(working_dir=tmp_path),
     )
 
     group = suite.tests
     assert [test.device for test in group] == [
-        "role=server,port=/dev/ttyUSB0",
-        "role=client,port=/dev/ttyUSB1",
+        "role=server,address=/dev/ttyUSB0",
+        "role=client,address=/dev/ttyUSB1",
     ]
 
 
 @pytest.mark.parametrize(
     "devices, message",
     [
-        (("role=server,port=/dev/ttyUSB0",), "Missing device query"),
+        (("role=server,address=/dev/ttyUSB0",), "Missing device query"),
         (
-            ("role=server,port=/dev/ttyUSB0", "role=server,port=/dev/ttyUSB1"),
+            ("role=server,address=/dev/ttyUSB0", "role=server,address=/dev/ttyUSB1"),
             "more than once",
         ),
         (
-            ("role=other,port=/dev/ttyUSB0", "role=client,port=/dev/ttyUSB1"),
+            ("role=other,address=/dev/ttyUSB0", "role=client,address=/dev/ttyUSB1"),
             "Unknown role",
         ),
-        (("role=server,port=/dev/ttyUSB0", "board-1"), "cannot be mixed"),
+        (("role=server,address=/dev/ttyUSB0", "board-1"), "cannot be mixed"),
     ],
 )
 def test_role_suite_from_inputs_validates_role_qualified_devices(
@@ -285,7 +285,7 @@ def test_parse_role_devices_rejects_query_matching_multiple_roles(monkeypatch):
 
     with pytest.raises(ValueError, match="more than one role"):
         RoleSuiteInputStrategy._parse_role_devices(
-            ("role=server,port=/dev/ttyUSB0",),
+            ("role=server,address=/dev/ttyUSB0",),
             ("server", "client"),
         )
 

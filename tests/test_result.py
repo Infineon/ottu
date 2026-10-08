@@ -1,7 +1,6 @@
 """Serial test output tests."""
 
 import pytest
-from ottu.device import SerialDeviceAccess
 from ottu.result import ExpectedOutputParser, TestOutput, TestOutputParser, TestStatus
 
 
@@ -36,22 +35,6 @@ class TerminalStatusOutputParser(TestOutputParser):
             elif normalized_line == TestStatus.FAILED.value:
                 status = TestStatus.FAILED
         return TestOutput(tuple(lines), status)
-
-
-def test_serial_device_access_connects_to_serial_port():
-    connection = FakeSerial([])
-    calls = []
-
-    def serial_factory(**kwargs):
-        calls.append(kwargs)
-        return connection
-
-    result = SerialDeviceAccess(serial_factory=serial_factory).connect(
-        {"port": "/dev/ttyUSB0"}
-    )
-
-    assert result is connection
-    assert calls == [{"port": "/dev/ttyUSB0", "baudrate": 115200, "timeout": 1.0}]
 
 
 def test_test_output_reads_parses_and_prints_serial_output():
@@ -139,11 +122,6 @@ def test_test_output_waits_through_empty_reads():
     ).parse(connection)
 
     assert output.lines == ("first", "second")
-
-
-def test_test_output_requires_a_serial_port():
-    with pytest.raises(ValueError, match="serial port is required"):
-        SerialDeviceAccess().connect({"name": "board"})
 
 
 def test_test_output_propagates_reading_failure():
