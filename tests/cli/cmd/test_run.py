@@ -322,7 +322,7 @@ def test_run_accepts_repeated_devices(project, monkeypatch):
     test_file = root / "check.py"
     test_file.touch()
     monkeypatch.setattr(
-        "ottu.device.SerialDeviceAccess.connect",
+        "ottu.device.DeviceAccessSerial.connect",
         lambda self, device: type(
             "Connection",
             (),
@@ -342,7 +342,7 @@ def test_run_accepts_repeated_devices(project, monkeypatch):
             "--device",
             "board-1",
             "--device",
-            "port=/dev/ttyUSB0,baud=9600",
+            "address=/dev/ttyUSB0",
             "check.py",
         ],
     )
