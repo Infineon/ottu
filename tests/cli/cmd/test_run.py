@@ -350,6 +350,27 @@ def test_run_accepts_repeated_devices(project, monkeypatch):
     assert result.exit_code == 0
 
 
+def test_run_accepts_a_device_list(project):
+    """Run accepts a device list file path."""
+    root, _ = project
+    (root / "check.py").touch()
+    (root / "devs.yaml").touch()
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--working-dir",
+            str(root),
+            "run",
+            "--dev-list",
+            "devs.yaml",
+            "check.py",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+
 def test_run_rejects_missing_exclusion(project):
     """Run fails when an exclusion cannot be resolved."""
     root, _ = project
