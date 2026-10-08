@@ -75,18 +75,19 @@ class Test:
         if self.backend is None:
             raise ValueError("Test backend is required.")
 
-        device = Device.from_string(self.device) if self.device else Device({})
-        self._notify(TestStatus.CONNECTING, device=device.get("device"))
+        device = Device.from_string(self.device) if self.device else Device()
+        device = device.acquire()
+        self._notify(TestStatus.CONNECTING, device=device.name)
         connection = device.connect()
         output = None
         try:
             self.backend.run(
                 self.test_path.absolute_path,
-                device,
+                device.backend_variables(),
                 observers=self.observers,
             )
             if connection is not None:
-                self._notify(TestStatus.EXECUTING, device=device.get("device"))
+                self._notify(TestStatus.EXECUTING, device=device.name)
                 output = TestOutputParser.from_test_path(
                     self.test_path.absolute_path
                 ).parse(connection)
@@ -96,7 +97,7 @@ class Test:
         return self._notify(
             output.status if output and output.status else TestStatus.PASSED,
             output=output,
-            device=device.get("device"),
+            device=device.name,
         )
 
     def _notify(
