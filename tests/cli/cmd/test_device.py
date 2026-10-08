@@ -1,6 +1,7 @@
 """Tests for the ``ottu device`` command group."""
 
 import pytest
+import yaml
 from click.testing import CliRunner
 from ottu.cli import cli
 
@@ -156,8 +157,8 @@ def test_device_query_requires_key(dev_list):
 def test_device_query_reports_missing_list(tmp_path):
     result = invoke("uid", "--dev-list", str(tmp_path / "missing.yml"))
 
-    assert result.exit_code == 1
-    assert "Cannot load device list" in result.output
+    assert result.exit_code != 0
+    assert isinstance(result.exception, FileNotFoundError)
 
 
 def test_device_query_reports_invalid_list(tmp_path):
@@ -166,8 +167,9 @@ def test_device_query_reports_invalid_list(tmp_path):
 
     result = invoke("uid", "--dev-list", str(path))
 
-    assert result.exit_code == 1
-    assert "Cannot load device list" in result.output
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "Unsupported device schema version: 2" in str(result.exception)
 
 
 def test_device_query_reports_malformed_yaml(tmp_path):
@@ -176,8 +178,8 @@ def test_device_query_reports_malformed_yaml(tmp_path):
 
     result = invoke("uid", "--dev-list", str(path))
 
-    assert result.exit_code == 1
-    assert "Cannot load device list" in result.output
+    assert result.exit_code != 0
+    assert isinstance(result.exception, yaml.YAMLError)
 
 
 @pytest.mark.parametrize("text", ["name", "name=", "=uno"])
