@@ -44,7 +44,7 @@ def query(
     only_connected: bool,
 ) -> None:
     """Print KEY for the devices in a device list that match the filters."""
-    path = (cli_ctx.working_dir or Path.cwd()) / dev_list
+    path = cli_ctx.working_dir / dev_list
     devices = Device.from_file(str(path))
 
     try:
