@@ -1,0 +1,14 @@
+version: 1
+
+devices:
+  - name: infineon:psoc6:cy8ckit_062s2_ai
+    uid: 0D170C5A012D2400
+    features:
+      - ble
+      - {vid: "04b4", pid: "f155"}
+
+  - name: infineon:psoc6:cy8ckit_062s2_ai
+    uid: 191C0C5A012D2400
+    features:
+      - gpio
+      - {vid: "04b4", pid: "f155"}

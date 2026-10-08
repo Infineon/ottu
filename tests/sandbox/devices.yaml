@@ -1,0 +1,17 @@
+version: 1
+
+devices:
+  - name: sandbox-server
+    uid: 5E4D00000001
+    address: /dev/ttyUSB0
+    features: []
+
+  - name: sandbox-client
+    uid: 5E4D00000002
+    address: /dev/ttyUSB1
+    features: []
+
+  - name: sandbox-gateway
+    uid: 5E4D00000003
+    address: /dev/ttyUSB2
+    features: []
