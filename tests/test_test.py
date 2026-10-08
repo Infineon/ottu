@@ -2,7 +2,7 @@
 
 import pytest
 from ottu.backend import Backend
-from ottu.device import Device, SerialDeviceAccess
+from ottu.device import DeviceAccessSerial
 from ottu.result import TestOutput, TestOutputParser, TestStatus
 from ottu.test import Test, TestOpts
 from ottu.test_path import TestPath, TestPathContext
@@ -26,7 +26,7 @@ def test_test_run_invokes_assigned_backend(monkeypatch, tmp_path):
         calls.append((test_path, device, kwargs))
 
     monkeypatch.setattr(
-        SerialDeviceAccess,
+        DeviceAccessSerial,
         "connect",
         lambda self, device: type(
             "Connection",
@@ -42,18 +42,17 @@ def test_test_run_invokes_assigned_backend(monkeypatch, tmp_path):
 
     Test(
         test_path,
-        device="name=board-1,port=/dev/ttyUSB0",
+        device="name=board-1,address=/dev/ttyUSB0",
         backend=backend,
     ).run()
 
     assert len(calls) == 1
     called_test_path, device, kwargs = calls[0]
     assert called_test_path == test_path.absolute_path
-    assert isinstance(device, Device)
-    assert dict(device) == {
+    assert device == {
         "name": "board-1",
-        "port": "/dev/ttyUSB0",
         "device": "board-1",
+        "address": "/dev/ttyUSB0",
     }
     assert kwargs == {"observers": ()}
 
@@ -78,7 +77,7 @@ def test_test_run_returns_device_reported_failure(monkeypatch, tmp_path):
     backend = Backend.from_mapping({"program": "echo program"})
 
     monkeypatch.setattr(
-        SerialDeviceAccess,
+        DeviceAccessSerial,
         "connect",
         lambda self, device: type("Connection", (), {"close": lambda self: None})(),
     )
@@ -96,7 +95,7 @@ def test_test_run_returns_device_reported_failure(monkeypatch, tmp_path):
 
     result = Test(
         test_path,
-        device="port=/dev/ttyUSB0",
+        device="address=/dev/ttyUSB0",
         backend=backend,
     ).run()
 
@@ -147,7 +146,7 @@ def test_test_run_reads_output_after_backend(monkeypatch, tmp_path):
             statuses.append(result.status)
 
     monkeypatch.setattr(
-        SerialDeviceAccess,
+        DeviceAccessSerial,
         "connect",
         lambda self, device: type("Connection", (), {"close": lambda self: None})(),
     )
@@ -160,7 +159,7 @@ def test_test_run_reads_output_after_backend(monkeypatch, tmp_path):
 
     result = Test(
         test_path,
-        device="port=/dev/ttyUSB0",
+        device="address=/dev/ttyUSB0",
         backend=backend,
         observers=(Observer(),),
     ).run()
@@ -185,7 +184,7 @@ def test_test_run_uses_expected_output_file(monkeypatch, tmp_path):
     lines = iter((b"ready\n", b"PASS\n", b""))
 
     monkeypatch.setattr(
-        SerialDeviceAccess,
+        DeviceAccessSerial,
         "connect",
         lambda self, device: type(
             "Connection",
@@ -204,7 +203,7 @@ def test_test_run_uses_expected_output_file(monkeypatch, tmp_path):
 
     result = Test(
         test_path,
-        device="port=/dev/ttyUSB0",
+        device="address=/dev/ttyUSB0",
         backend=backend,
     ).run()
 
@@ -280,7 +279,7 @@ def test_test_stores_device_requirement(tmp_path):
     """Test stores its device requirement independently from execution options."""
     test_path = TestPath(tmp_path / "check.py", tmp_path / "check.py", None, "check.py")
 
-    test = Test(test_path, device="port=/dev/ttyUSB0")
+    test = Test(test_path, device="address=/dev/ttyUSB0")
 
-    assert test.device == "port=/dev/ttyUSB0"
+    assert test.device == "address=/dev/ttyUSB0"
     assert test.options == TestOpts()
