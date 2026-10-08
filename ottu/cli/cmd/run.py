@@ -21,6 +21,12 @@ from ottu.test_path import TestPathContext
     help="Device identifier or comma-separated device key=value values.",
 )
 @click.option(
+    "--dev-list",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Device list YAML file the --device values are resolved against.",
+)
+@click.option(
     "--count",
     "-c",
     type=str,
@@ -40,6 +46,7 @@ def run(
     tests: tuple[str, ...],
     exclude: tuple[str, ...],
     device: tuple[str, ...],
+    dev_list: Path | None,
     count: str | None,
     jobs: int,
 ) -> None:
@@ -49,11 +56,12 @@ def run(
     suite = Suite.from_inputs(
         tests,
         context=TestPathContext.load(
-            working_dir=cli_ctx.working_dir or Path.cwd(),
+            working_dir=cli_ctx.working_dir,
             project_root=cli_ctx.project_root,
         ),
         exclude=exclude,
         devices=device,
+        dev_list=dev_list,
         count=count,
         jobs=jobs,
         backend=Backend.load(
