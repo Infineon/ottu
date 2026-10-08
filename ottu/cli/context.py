@@ -9,7 +9,7 @@ class CliContext:
     """CLI path state shared by commands."""
 
     project_root: Path | None
-    working_dir: Path | None = None
+    working_dir: Path
 
     @classmethod
     def discover(cls, working_dir: Path | str | None = None) -> "CliContext":
