@@ -3,6 +3,7 @@
 import click
 
 from ottu import __version__
+from ottu.cli.cmd.device import device
 from ottu.cli.cmd.run import run
 from ottu.cli.context import CliContext
 
@@ -20,6 +21,7 @@ def cli(ctx: click.Context, working_dir: str | None) -> None:
     ctx.obj = CliContext.discover(working_dir=working_dir)
 
 
+cli.add_command(device)
 cli.add_command(run)
 
 
