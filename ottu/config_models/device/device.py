@@ -28,4 +28,4 @@ class DeviceConfig:
         return model.model_validate(values).devices
 
 
-__all__ = ["DeviceConfig"]
+__all__ = ["DeviceConfig", "DeviceDefinition"]
