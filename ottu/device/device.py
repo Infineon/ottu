@@ -3,8 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from ottu.config_models.device.device import DeviceConfig
-from ottu.config_models.device.v1 import DeviceDefinition
+from ottu.config_models.device.device import DeviceConfig, DeviceDefinition
 
 from .access import DeviceAccess, DeviceConnection
 
