@@ -78,6 +78,16 @@ class DeviceAccessSerial(DeviceAccess):
             for port in _comports()
         )
 
+    def get_address(self) -> str | None:
+        if self.address:
+            return self.address
+        if self.uid is None:
+            return None
+        for port in _comports():
+            if port.serial_number == self.uid:
+                return cast(str, port.device)
+        return None
+
     @classmethod
     def scan(
         cls,
