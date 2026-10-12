@@ -1,6 +1,7 @@
 """Runtime device parsing and acquisition."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ottu.config_models.device.device import DeviceConfig, DeviceDefinition
@@ -77,7 +78,7 @@ class Device:
         return self.access is not None and self.access.is_connected()
 
     @classmethod
-    def from_file(cls, devs_file: str) -> list["Device"]:
+    def from_file(cls, devs_file: str | Path) -> list["Device"]:
         """Load device definitions and resolve them into runtime devices."""
         return [
             cls.from_definition(definition)
@@ -108,14 +109,24 @@ class Device:
             return (self.access.get_address() if self.access else None) or None
         return getattr(self, key)
 
+    def identity_filters(self) -> tuple[dict[str, Any], ...]:
+        """Return filters for the non-null identity values of this device."""
+        return tuple(
+            {key: value}
+            for key in ("name", "uid", "address")
+            if (value := self.get(key)) is not None
+        )
+
     def backend_variables(self) -> dict[str, str]:
         """Return device values used to render backend command placeholders."""
         values: dict[str, str] = {}
         if self.name is not None:
             values["name"] = self.name
             values["device"] = self.name
-        if self.access is not None and self.access.get_address():
-            values["address"] = self.access.get_address()
+        if self.access is not None:
+            address = self.access.get_address()
+            if address:
+                values["address"] = address
         return values
 
     def connect(self) -> DeviceConnection | None:
