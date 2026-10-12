@@ -28,8 +28,8 @@ class DeviceAccess(ABC):
     def __post_init__(self) -> None:
         self._validate()
 
-    def get_address(self) -> str:
-        return self.address
+    def get_address(self) -> str | None:
+        return self.address or None
 
     def get_uid(self) -> str | None:
         return self.uid
