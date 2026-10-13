@@ -32,6 +32,7 @@ dependencies = [
     "PyYAML>=6.0",
     "pyserial>=3.5",
     "rich>=13.0.0",
+    "urllib3>=2.8.0",
 ]
 
 [project.optional-dependencies]
