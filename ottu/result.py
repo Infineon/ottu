@@ -9,7 +9,8 @@ from pathlib import Path
 from time import monotonic
 from typing import Protocol
 
-from ottu.device import DeviceConnection
+from ottu.device import Device, DeviceConnection
+from ottu.test_path import TestPath
 
 
 class TestStatus(str, Enum):
@@ -124,15 +125,15 @@ class ExpectedOutputParser(TestOutputParser):
 
 @dataclass(frozen=True)
 class TestResult:
-    """Lifecycle result of one resolved test."""
+    """Lifecycle result of one resolved test path."""
 
     __test__ = False
 
-    test_name: str
+    test_path: TestPath
     status: TestStatus
+    device: Device | None = None
     output: TestOutput | None = None
     message: str | None = None
-    device: str | None = None
     job_id: str | None = None
 
     @property
