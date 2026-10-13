@@ -1,8 +1,10 @@
 """Test execution and option tests."""
 
+from pathlib import Path
+
 import pytest
 from ottu.backend import Backend
-from ottu.device import DeviceAccessSerial
+from ottu.device import Device, DeviceAccessSerial
 from ottu.result import TestOutput, TestOutputParser, TestStatus
 from ottu.test import Test, TestOpts
 from ottu.test_path import TestPath, TestPathContext
@@ -40,21 +42,32 @@ def test_test_run_invokes_assigned_backend(monkeypatch, tmp_path):
 
     monkeypatch.setattr(Backend, "run", run_backend)
 
-    Test(
+    test = Test(
         test_path,
-        device="name=board-1,address=/dev/ttyUSB0",
+        device=Device.from_string("name=board-1,address=/dev/ttyUSB0"),
         backend=backend,
-    ).run()
+    )
+    test.run()
 
     assert len(calls) == 1
     called_test_path, device, kwargs = calls[0]
-    assert called_test_path == test_path.absolute_path
-    assert device == {
-        "name": "board-1",
-        "device": "board-1",
-        "address": "/dev/ttyUSB0",
-    }
+    assert called_test_path == test_path
+    assert device == test.device
     assert kwargs == {"observers": ()}
+    assert test.device.name == "board-1"
+
+
+def test_test_display_name_uses_working_directory_relative_path(tmp_path):
+    test_path = TestPath(
+        tmp_path / "tests" / "check.py",
+        Path("tests/check.py"),
+        None,
+        "check.py",
+    )
+
+    from ottu.cli.output import CliOutput
+
+    assert CliOutput._test_name(test_path) == "check.py"
 
 
 def test_test_run_propagates_backend_failure(monkeypatch, tmp_path):
@@ -95,7 +108,7 @@ def test_test_run_returns_device_reported_failure(monkeypatch, tmp_path):
 
     result = Test(
         test_path,
-        device="address=/dev/ttyUSB0",
+        device=Device.from_string("address=/dev/ttyUSB0"),
         backend=backend,
     ).run()
 
@@ -121,7 +134,7 @@ def test_test_run_notifies_observer_of_final_status(monkeypatch, tmp_path):
 
     Test(test_path, backend=backend, observers=(Observer(),)).run()
 
-    assert [(event.test_name, event.status) for event in events] == [
+    assert [(event.test_path.file_name, event.status) for event in events] == [
         ("check.py", TestStatus.CONNECTING),
         ("check.py", TestStatus.PASSED),
     ]
@@ -159,7 +172,7 @@ def test_test_run_reads_output_after_backend(monkeypatch, tmp_path):
 
     result = Test(
         test_path,
-        device="address=/dev/ttyUSB0",
+        device=Device.from_string("address=/dev/ttyUSB0"),
         backend=backend,
         observers=(Observer(),),
     ).run()
@@ -203,7 +216,7 @@ def test_test_run_uses_expected_output_file(monkeypatch, tmp_path):
 
     result = Test(
         test_path,
-        device="address=/dev/ttyUSB0",
+        device=Device.from_string("address=/dev/ttyUSB0"),
         backend=backend,
     ).run()
 
@@ -279,7 +292,7 @@ def test_test_stores_device_requirement(tmp_path):
     """Test stores its device requirement independently from execution options."""
     test_path = TestPath(tmp_path / "check.py", tmp_path / "check.py", None, "check.py")
 
-    test = Test(test_path, device="address=/dev/ttyUSB0")
+    test = Test(test_path, device=Device.from_string("address=/dev/ttyUSB0"))
 
-    assert test.device == "address=/dev/ttyUSB0"
+    assert test.device == Device.from_string("address=/dev/ttyUSB0")
     assert test.options == TestOpts()
