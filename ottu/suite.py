@@ -4,11 +4,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from glob import has_magic
 from multiprocessing import Process, Queue
+from pathlib import Path
 from queue import Empty
 from re import fullmatch
 from typing import cast
 
 from ottu.backend import Backend
+from ottu.device import Device, DeviceQuery
 from ottu.result import TestResult, TestResultObserver
 from ottu.test import Test, TestOpts
 from ottu.test_path import TestPathContext, TestPathResolver
@@ -55,6 +57,7 @@ class SuiteInputStrategy:
         exclude_test_selectors: Sequence[str],
         count: str | None,
         devices: Sequence[str] = (),
+        dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
         observers: Sequence[TestResultObserver] = (),
@@ -74,7 +77,9 @@ class SuiteInputStrategy:
 
     @staticmethod
     def _assign_devices(
-        base_tests: Sequence[Test], devices: Sequence[str], replicas: int = 1
+        base_tests: Sequence[Test],
+        available_resolved_devices: Sequence[Device],
+        required_count: int = 1,
     ) -> list[Test]:
         """Create one test for every test and device combination.
 
@@ -83,19 +88,23 @@ class SuiteInputStrategy:
         a device.
         """
         tests: list[Test] = []
+        available_resolved_devices = list(available_resolved_devices)
+
         for test in base_tests:
-            if replicas > 1:
-                if devices:
-                    if len(devices) < replicas:
-                        raise ValueError(
-                            f"'{test.test_path.file_name}' needs {replicas} "
-                            f"devices for its count, but only {len(devices)} "
-                            "were provided."
-                        )
-                    replica_devices: Sequence[str | None] = devices[:replicas]
-                else:
-                    replica_devices = [None] * replicas
-                tests.extend(
+            if len(available_resolved_devices) < required_count:
+                raise ValueError(
+                    f"'{test.test_path.file_name}' needs {required_count} "
+                    "devices for its count, but only "
+                    f"{len(available_resolved_devices)} were provided."
+                )
+
+            for _ in range(required_count):
+                device = (
+                    available_resolved_devices.pop(0)
+                    if available_resolved_devices
+                    else None
+                )
+                tests.append(
                     Test(
                         test.test_path,
                         options=test.options,
@@ -103,22 +112,60 @@ class SuiteInputStrategy:
                         backend=test.backend,
                         observers=test.observers,
                     )
-                    for device in replica_devices
                 )
-            elif devices:
-                tests.extend(
-                    Test(
-                        test.test_path,
-                        options=test.options,
-                        device=device,
-                        backend=test.backend,
-                        observers=test.observers,
-                    )
-                    for device in devices
-                )
-            else:
-                tests.append(test)
         return tests
+
+    @staticmethod
+    def _resolve_devices(
+        device_inputs: Sequence[str],
+        available_devices: Path | Sequence[Device] | None,
+    ) -> tuple[Device, ...]:
+        """Resolve device definitions or queries from the supplied input.
+
+        ``available_devices`` may be a path to a YAML device list or an already-loaded
+        sequence of devices. The latter lets role suites resolve and reserve
+        devices incrementally without reloading the full list for each role.
+        When it is ``None``, each query is resolved directly with
+        :meth:`Device.from_string`.
+        """
+        if available_devices is None:
+            return SuiteInputStrategy._resolve_devices_from_definitions(device_inputs)
+
+        available_resolved_devices = (
+            Device.from_file(available_devices)
+            if isinstance(available_devices, Path)
+            else available_devices
+        )
+        return SuiteInputStrategy._resolve_devices_from_queries(
+            device_inputs, available_resolved_devices
+        )
+
+    @staticmethod
+    def _resolve_devices_from_definitions(
+        device_definitions: Sequence[str],
+    ) -> tuple[Device, ...]:
+        """Resolve devices directly from their definitions."""
+        if not device_definitions:
+            # TODO: Resolve a default device supplied by the backend.
+            raise ValueError("At least one device is required.")
+        resolved_devices = tuple(
+            Device.from_string(definition) for definition in device_definitions
+        )
+        return resolved_devices
+
+    @staticmethod
+    def _resolve_devices_from_queries(
+        device_queries: Sequence[str],
+        available_devices: Sequence[Device],
+    ) -> tuple[Device, ...]:
+        """Resolve queries by matching them against available devices."""
+        matching_devices: list[Device] = []
+        query_inputs = device_queries or (None,)
+        for query in query_inputs:
+            for device in DeviceQuery.find(available_devices, query):
+                if device not in matching_devices:
+                    matching_devices.append(device)
+        return tuple(matching_devices)
 
 
 @dataclass(frozen=True)
@@ -147,6 +194,7 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
         exclude_test_selectors: Sequence[str],
         count: str | None,
         devices: Sequence[str] = (),
+        dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
         observers: Sequence[TestResultObserver] = (),
@@ -160,6 +208,9 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
             devices=devices,
             jobs=jobs,
         )
+        available_devices = (
+            list(Device.from_file(dev_list)) if dev_list is not None else None
+        )
 
         tests: list[Test] = []
         for role, test_selector in parsed_inputs.selectors.items():
@@ -170,14 +221,93 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
                 backend=backend,
                 observers=observers,
             )
-            tests.extend(
-                cls._assign_devices(
-                    role_tests,
-                    parsed_inputs.devices.get(role, ()),
-                    parsed_inputs.counts.get(role, 1),
-                )
+            role_queries = parsed_inputs.devices.get(role, ())
+            required_count = parsed_inputs.counts.get(role, 1)
+            assigned_tests, available_devices = cls._resolve_and_assign_devices(
+                role,
+                role_tests[0],
+                role_queries,
+                available_devices,
+                required_count,
             )
-        return Suite(SuiteOpts(jobs), tests, runner="runner_parallel")
+            tests.extend(assigned_tests)
+        return Suite(
+            SuiteOpts(jobs),
+            tests,
+            runner="runner_parallel",
+        )
+
+    @classmethod
+    def _resolve_and_assign_devices(
+        cls,
+        role: str,
+        role_test: Test,
+        device_queries: Sequence[str],
+        available_devices: Sequence[Device] | None,
+        required_count: int,
+    ) -> tuple[list[Test], list[Device] | None]:
+        """Resolve, reserve, and assign the devices for one role."""
+        role_devices = cls._resolve_device(
+            role,
+            device_queries,
+            available_devices,
+            required_count,
+        )
+        assigned_devices = role_devices[:required_count]
+        remaining_devices = (
+            [device for device in available_devices if device not in assigned_devices]
+            if available_devices is not None
+            else None
+        )
+        assigned_tests = cls._assign_devices(
+            (role_test,),
+            assigned_devices,
+            required_count,
+        )
+        return assigned_tests, remaining_devices
+
+    @classmethod
+    def _resolve_device(
+        cls,
+        role: str,
+        device_queries: Sequence[str],
+        available_devices: Sequence[Device] | None,
+        required_count: int,
+    ) -> tuple[Device, ...]:
+        """Resolve and validate the devices assigned to one role.
+
+        Role qualifiers are removed before delegating to the shared resolver.
+        ``available_devices`` contains only devices still available to this role;
+        callers remove the returned devices afterward to prevent reuse by later
+        roles.
+        """
+        if not device_queries:
+            if available_devices is None:
+                raise ValueError(f"Role '{role}' requires a device.")
+            raise ValueError(
+                f"Role '{role}' needs {required_count} connected devices, "
+                "but only 0 matched."
+            )
+
+        normalized_queries = tuple(
+            cls._remove_role(query, role) or "" for query in device_queries
+        )
+        if available_devices is None and len(normalized_queries) < required_count:
+            raise ValueError(
+                f"Role '{role}' needs {required_count} devices, "
+                f"but only {len(normalized_queries)} were provided."
+            )
+        return SuiteInputStrategy._resolve_devices(
+            normalized_queries,
+            available_devices,
+        )
+
+    @staticmethod
+    def _remove_role(device: str, role: str) -> str | None:
+        """Remove the role qualifier before matching a device definition."""
+        parameters = [part.strip() for part in device.split(",")]
+        parameters = [part for part in parameters if part != f"role={role}"]
+        return ",".join(parameters) or None
 
     @classmethod
     def _parse_role_devices(
@@ -403,6 +533,7 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
         exclude_test_selectors: Sequence[str],
         count: str | None,
         devices: Sequence[str] = (),
+        dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
         observers: Sequence[TestResultObserver] = (),
@@ -417,9 +548,14 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
             backend=backend,
             observers=observers,
         )
-        tests = cls._assign_devices(tests, devices)
         options = SuiteOpts(jobs, parsed_count)
-        return Suite(options, tests, runner=cls._select_runner(options))
+        resolved_devices = cls._resolve_devices(devices, dev_list)
+        return Suite(
+            options,
+            tests,
+            runner=cls._select_runner(options),
+            resolved_devices=resolved_devices,
+        )
 
     @staticmethod
     def _select_runner(options: SuiteOpts) -> str:
@@ -450,6 +586,7 @@ class Suite:
     options: SuiteOpts
     tests: Sequence[Test]
     runner: str = ""
+    resolved_devices: Sequence[Device] = ()
 
     @classmethod
     def from_inputs(
@@ -460,6 +597,7 @@ class Suite:
         exclude: Sequence[str] = (),
         count: str | None = None,
         devices: Sequence[str] = (),
+        dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
         observers: Sequence[TestResultObserver] = (),
@@ -474,6 +612,7 @@ class Suite:
                     exclude_test_selectors=exclude,
                     count=count,
                     devices=devices,
+                    dev_list=dev_list,
                     jobs=jobs,
                     backend=backend,
                     observers=observers,
@@ -488,17 +627,37 @@ class Suite:
     def runner_sequential(
         self, observer: SuiteParallelTestResultObserver | None = None
     ) -> list[TestResult]:
-        """Run each test directly, one at a time, in order."""
-        return [self._run_test(test, observer) for test in self.tests]
+        """Run each test directly, one at a time, in order.
+
+        The first resolved device is assigned to every test in this process.
+        """
+        device = self.resolved_devices[0] if self.resolved_devices else None
+        return [
+            self._run_test(
+                replace(test, device=device) if device is not None else test,
+                observer,
+            )
+            for test in self.tests
+        ]
 
     def runner_repeated(
         self, observer: SuiteParallelTestResultObserver | None = None
     ) -> list[TestResult]:
-        """Run each test ``count`` times in parallel, as its own sub-suite."""
+        """Expand and run each base test's ``count`` replicas in parallel."""
         results: list[TestResult] = []
         for test in self.tests:
-            sub_suite = Suite(self.options, [test] * self.options.count)
-            results.extend(sub_suite.runner_parallel(observer))
+            repeated_tests = SuiteInputStrategy._assign_devices(
+                (test,),
+                self.resolved_devices,
+                self.options.count,
+            )
+            results.extend(
+                Suite(
+                    self.options,
+                    repeated_tests,
+                    runner="runner_parallel",
+                ).runner_parallel(observer)
+            )
         return results
 
     def runner_parallel(
@@ -555,7 +714,6 @@ class Suite:
             test = replace(test, observers=(observer,))
         return test.run()
 
-    # TODO: Review the job_id implementation after device module enablement.
     @staticmethod
     def _replica_targets(tests: Sequence[Test]) -> list[tuple[Test, str]]:
         """Pair each test in a group with its job id."""
@@ -568,21 +726,48 @@ class Suite:
         return targets
 
     def split(self, jobs: int) -> list[Suite]:
-        """Split tests into contiguous suite jobs."""
+        """Split tests and reserve a disjoint device group for each job."""
         runner = StandardSuiteInputStrategy._select_runner(
             replace(self.options, jobs=1)
         )
         if jobs == 1 or len(self.tests) <= 1:
-            return [Suite(self.options, list(self.tests), runner=runner)]
+            return [
+                Suite(
+                    self.options,
+                    list(self.tests),
+                    runner=runner,
+                    resolved_devices=self.resolved_devices,
+                )
+            ]
 
         job_count = min(jobs, len(self.tests))
+        devices_per_job = self.options.count
+        required_devices = job_count * devices_per_job
+        if len(self.resolved_devices) < required_devices and (
+            self.resolved_devices or self.options.count > 1
+        ):
+            raise ValueError(
+                f"Distributed execution needs {required_devices} devices for "
+                f"{job_count} jobs, but only {len(self.resolved_devices)} were "
+                "provided."
+            )
+
         base_size, remainder = divmod(len(self.tests), job_count)
         suite_jobs: list[Suite] = []
         start = 0
         for job_index in range(job_count):
             job_size = base_size + (job_index < remainder)
             chunk = list(self.tests[start : start + job_size])
-            suite_jobs.append(Suite(self.options, chunk, runner=runner))
+            device_start = job_index * devices_per_job
+            device_end = device_start + devices_per_job
+            suite_jobs.append(
+                Suite(
+                    self.options,
+                    chunk,
+                    runner=runner,
+                    resolved_devices=self.resolved_devices[device_start:device_end],
+                )
+            )
             start += job_size
         return suite_jobs
 
