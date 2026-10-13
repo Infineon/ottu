@@ -19,6 +19,11 @@ from ottu.suite import (
 from ottu.test import Test, TestOpts, TestPath, TestPathContext, TestPathResolver
 
 
+def make_result(name, status, job_id=None):
+    path = TestPath(name, name, None, name)
+    return TestResult(path, status, job_id=job_id)
+
+
 def test_standard_input_strategy_matches_plain_inputs():
     """The standard strategy accepts unqualified test selectors."""
     assert StandardSuiteInputStrategy.matches(["test_a.py", "test_b.py"])
@@ -722,7 +727,10 @@ def test_test_suite_returns_each_test_in_order(tmp_path):
         runner="runner_sequential",
     ).run()
 
-    assert [result.test_name for result in results] == ["first.py", "second.py"]
+    assert [result.test_path.file_name for result in results] == [
+        "first.py",
+        "second.py",
+    ]
     assert all(result.passed for result in results)
 
 
@@ -901,7 +909,7 @@ def test_suite_runs_plain_tests_directly(monkeypatch):
     results = Suite(SuiteOpts(), [test], runner="runner_sequential").run()
 
     assert events == []
-    assert [(result.test_name, result.passed) for result in results] == [
+    assert [(result.test_path.file_name, result.passed) for result in results] == [
         ("first.py", True)
     ]
 
@@ -1178,11 +1186,11 @@ def test_queue_observer_publishes_result_with_job_id():
         def put(self, result):
             queued.append(result)
 
-    result = TestResult("check.py", TestStatus.BUILDING)
+    result = make_result("check.py", TestStatus.BUILDING)
 
     SuiteParallelTestResultObserver(FakeQueue(), "1").result_changed(result)
 
-    assert queued == [TestResult("check.py", TestStatus.BUILDING, job_id="1")]
+    assert queued == [make_result("check.py", TestStatus.BUILDING, job_id="1")]
 
 
 def test_run_job_queues_a_plain_test_result():
@@ -1206,7 +1214,7 @@ def test_run_job_queues_a_plain_test_result():
 
     assert len(results) == 1
     assert published
-    assert all(item.test_name == "check.py" for item in published)
+    assert all(item.test_path.file_name == "check.py" for item in published)
     assert published[-1].passed
 
 
@@ -1247,7 +1255,7 @@ def test_runner_repeated_queues_a_plain_test_result(monkeypatch):
 
     assert results == []
     assert published
-    assert all(item.test_name == "check.py" for item in published)
+    assert all(item.test_path.file_name == "check.py" for item in published)
     assert published[-1].passed
 
 
@@ -1325,7 +1333,7 @@ def test_suite_parallel_notifier_queues_labeled_result():
         def result_changed(self, result):
             self.results.append(result)
 
-    result = TestResult("check.py", TestStatus.BUILDING)
+    result = make_result("check.py", TestStatus.BUILDING)
     recording_observer = RecordingObserver()
     notifier = SuiteParallelTestResultNotifier(
         (recording_observer,),
@@ -1334,5 +1342,5 @@ def test_suite_parallel_notifier_queues_labeled_result():
     notifier.notify()
 
     assert recording_observer.results == [
-        TestResult("check.py", TestStatus.BUILDING, job_id="1")
+        make_result("check.py", TestStatus.BUILDING, job_id="1")
     ]
