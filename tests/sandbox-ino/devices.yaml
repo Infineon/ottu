@@ -12,3 +12,17 @@ devices:
     features:
       - gpio
       - {vid: "04b4", pid: "f155"}
+
+  - name: infineon:psoc6:cy8ckit_062s2_ai
+    uid: 1106035A012D2400
+    features:
+      - gpio
+      - {vid: "04b4", pid: "f155"}
+
+  - name: arduino:avr:uno
+    uid: 7583335393435130E051
+    features:
+      - gpio
+      - {vid: "2341", pid: "0043"}
+
+
