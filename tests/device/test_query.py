@@ -35,11 +35,33 @@ def test_query_alias_is_select():
     assert query == DeviceQuery.select
 
 
+def test_find_rejects_non_positive_limit(devices):
+    with pytest.raises(ValueError, match="limit must be positive"):
+        DeviceQuery.find(devices, limit=0)
+
+
+def test_find_stops_after_limit(devices):
+    assert DeviceQuery.find(devices, check_connected=False, limit=1) == [devices[0]]
+
+
+def test_find_accepts_bare_device_identity(devices):
+    assert DeviceQuery.find(devices, "uno", check_connected=False) == [
+        devices[0],
+        devices[2],
+    ]
+
+
+def test_find_accepts_mapping_filter(devices):
+    assert DeviceQuery.find(devices, {"name": "nano"}, check_connected=False) == [
+        devices[1]
+    ]
+
+
 def test_query_returns_uids_of_connected_devices(devices):
     assert query(devices, "uid") == ["abc123", "def456"]
 
 
-def test_query_returns_acquired_addresses(devices):
+def test_query_resolves_connected_addresses(devices):
     assert query(devices, "address") == ["/dev/ttyUSB0", "/dev/ttyUSB1"]
 
 
@@ -71,9 +93,9 @@ def test_query_accepts_mixed_string_and_dict_filters(devices):
     ]
 
 
-def test_query_string_filter_strips_whitespace_and_keeps_later_equals(devices):
+def test_query_string_filter_supports_comma_separated_values(devices):
     assert query(devices, "uid", [" name = nano "]) == ["def456"]
-    assert query(devices, "uid", ["name=uno,uid=abc123"]) == []
+    assert query(devices, "uid", ["name=uno,uid=abc123"]) == ["abc123"]
 
 
 @pytest.mark.parametrize("text", ["name", "name=", "=uno", "", "="])
@@ -82,7 +104,19 @@ def test_query_rejects_malformed_string_filters(devices, text):
         query(devices, "uid", [text])
 
 
-def test_query_filters_by_acquired_address(devices):
+def test_query_rejects_duplicate_filter_keys(devices):
+    with pytest.raises(ValueError, match="provided more than once"):
+        query(devices, "uid", ['name=uno,name="uno"'])
+
+
+def test_query_splits_escaped_quotes_in_filter_values():
+    assert DeviceQuery._split_filter_parts('name="uno\\"x",uid=abc123') == [
+        'name="uno\\"x"',
+        "uid=abc123",
+    ]
+
+
+def test_query_filters_by_known_address(devices):
     assert query(devices, "uid", [{"address": "/dev/ttyUSB1"}]) == ["def456"]
 
 
@@ -183,8 +217,11 @@ def test_query_without_connection_check_uses_definitions(monkeypatch, devices):
     ) == ["uno", "virtual"]
 
 
-def test_query_without_connection_check_keeps_unresolved_address(devices):
-    assert query(devices, "address", check_connected=False) == []
+def test_query_without_connection_check_resolves_known_address(devices):
+    assert query(devices, "address", check_connected=False) == [
+        "/dev/ttyUSB0",
+        "/dev/ttyUSB1",
+    ]
     assert query(devices, "uid", check_connected=False) == [
         "abc123",
         "def456",

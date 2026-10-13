@@ -54,6 +54,16 @@ def test_parse_device_parses_bare_device_as_name():
     }
 
 
+def test_device_identity_filters_include_non_null_identity_values():
+    device = Device.from_string("name=board-1,uid=abc123,address=/dev/ttyUSB0")
+
+    assert device.identity_filters() == (
+        {"name": "board-1"},
+        {"uid": "abc123"},
+        {"address": "/dev/ttyUSB0"},
+    )
+
+
 @pytest.mark.parametrize(
     "port",
     ["/dev/ttyACM0", "/dev/ttyUSB1", "/dev/ttyACM*", "/dev/ttyUSB*", "COM3", "COM*"],

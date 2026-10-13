@@ -62,6 +62,31 @@ def test_device_access_serial_getters(monkeypatch):
     assert access.get_uid() == "abc123"
 
 
+def test_device_access_serial_get_address_resolves_uid(monkeypatch):
+    monkeypatch.setattr(
+        "ottu.device.comports",
+        lambda: [
+            type(
+                "Port",
+                (),
+                {"device": "/dev/ttyUSB0", "serial_number": "abc123"},
+            )()
+        ],
+    )
+
+    assert DeviceAccessSerial(address="", uid="abc123").get_address() == "/dev/ttyUSB0"
+
+
+def test_device_access_serial_get_address_returns_none_for_missing_uid(monkeypatch):
+    monkeypatch.setattr("ottu.device.comports", lambda: [])
+
+    assert DeviceAccessSerial(address="", uid="abc123").get_address() is None
+
+
+def test_device_access_serial_get_address_returns_none_without_identity():
+    assert DeviceAccessSerial(address="").get_address() is None
+
+
 def test_device_access_factory_resolves_serial_port():
     access = DeviceAccess.from_value("/dev/ttyUSB0")
 
