@@ -38,7 +38,7 @@ class Test:
 
     test_path: TestPath
     options: TestOpts = field(default_factory=TestOpts)
-    device: str | None = None
+    device: Device | None = None
     backend: Backend | None = None
     observers: tuple[TestResultObserver, ...] = ()
 
@@ -75,19 +75,20 @@ class Test:
         if self.backend is None:
             raise ValueError("Test backend is required.")
 
-        device = Device.from_string(self.device) if self.device else Device()
+        device = self.device or Device()
         device = device.acquire()
-        self._notify(TestStatus.CONNECTING, device=device.name)
+        self.device = device
+        self._notify(TestStatus.CONNECTING)
         connection = device.connect()
         output = None
         try:
             self.backend.run(
-                self.test_path.absolute_path,
-                device.backend_variables(),
+                self.test_path,
+                device,
                 observers=self.observers,
             )
             if connection is not None:
-                self._notify(TestStatus.EXECUTING, device=device.name)
+                self._notify(TestStatus.EXECUTING)
                 output = TestOutputParser.from_test_path(
                     self.test_path.absolute_path
                 ).parse(connection)
@@ -97,7 +98,6 @@ class Test:
         return self._notify(
             output.status if output and output.status else TestStatus.PASSED,
             output=output,
-            device=device.name,
         )
 
     def _notify(
@@ -105,14 +105,13 @@ class Test:
         status: TestStatus,
         *,
         output: TestOutput | None = None,
-        device: str | None = None,
     ) -> TestResult:
         """Notify observers about a test status change."""
         result = TestResult(
-            self.test_path.file_name,
+            self.test_path,
             status,
+            device=self.device,
             output=output,
-            device=device,
         )
         for observer in self.observers:
             observer.result_changed(result)
