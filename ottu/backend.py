@@ -1,5 +1,7 @@
 """Declarative embedded backend execution."""
 
+from __future__ import annotations
+
 import shlex
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -11,7 +13,9 @@ import yaml
 
 from ottu.backend_builtins import BACKEND_BUILTINS
 from ottu.config_models.project.config import ProjectConfig
+from ottu.device import Device
 from ottu.result import TestResult, TestResultObserver, TestStatus
+from ottu.test_path import TestPath
 
 
 @dataclass(frozen=True)
@@ -22,7 +26,7 @@ class Backend:
     program: tuple[str, ...] | None = None
 
     @classmethod
-    def load(cls, project_root: str | Path | None = None) -> "Backend":
+    def load(cls, project_root: str | Path | None = None) -> Backend:
         """Load the backend configured by a project configuration."""
         source = ProjectConfig.from_project_root(project_root).backend
 
@@ -34,21 +38,21 @@ class Backend:
         return cls.from_name(source)
 
     @classmethod
-    def from_name(cls, name: str) -> "Backend":
+    def from_name(cls, name: str) -> Backend:
         """Load a built-in backend by name."""
         if name not in BACKEND_BUILTINS:
             raise ValueError(f"Unknown backend '{name}'.")
         return cls.from_mapping(BACKEND_BUILTINS[name])
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "Backend":
+    def from_yaml(cls, path: str | Path) -> Backend:
         """Load a backend definition from a YAML file."""
         with Path(path).open(encoding="utf-8") as definition:
             value = yaml.safe_load(definition) or {}
         return cls.from_mapping(value)
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "Backend":
+    def from_mapping(cls, value: Mapping[str, Any]) -> Backend:
         """Build a backend from a parsed YAML mapping."""
         raw_steps = value
         commands = {
@@ -70,17 +74,17 @@ class Backend:
 
     def run(
         self,
-        test_path: str | Path,
-        device: Mapping[str, Any],
+        test_path: TestPath,
+        device: Device,
         *,
         working_dir: str | Path | None = None,
         run_command: Callable[..., Any] = subprocess.run,
         observers: Sequence[TestResultObserver] = (),
     ) -> None:
         """Run backend commands for a resolved device."""
-        variables = dict(device)
+        variables = device.backend_variables()
         variables.setdefault("device", "")
-        variables["test_path"] = str(test_path)
+        variables["test_path"] = str(test_path.absolute_path)
         for configured_command, status in (
             (self.build, TestStatus.BUILDING),
             (self.program, TestStatus.FLASHING),
@@ -94,7 +98,7 @@ class Backend:
                 observers,
                 test_path,
                 status,
-                device=variables.get("device") or None,
+                device=device,
             )
             run_command(
                 command,
@@ -107,13 +111,13 @@ class Backend:
     @staticmethod
     def _notify(
         observers: Sequence[TestResultObserver],
-        test_path: str | Path,
+        test_path: TestPath,
         status: TestStatus,
-        device: str | None = None,
+        device: Device,
     ) -> None:
         """Notify observers about a backend execution stage."""
         if not observers:
             return
-        result = TestResult(Path(test_path).name, status, device=device)
+        result = TestResult(test_path, status, device=device)
         for observer in observers:
             observer.result_changed(result)
