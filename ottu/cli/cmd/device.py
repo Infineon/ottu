@@ -27,7 +27,7 @@ def device() -> None:
     "-f",
     "filters",
     multiple=True,
-    help="A key=value filter; repeat the option to match any of them.",
+    help="A comma-separated key=value filter; repeat the option to match any of them.",
 )
 @click.option(
     "--only-connected/--all",
