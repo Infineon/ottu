@@ -22,17 +22,19 @@ backend: debug
     return tmp_path, nested
 
 
-def test_run_without_project_marker_reports_none(tmp_path):
+def test_run_without_project_marker_requires_device(tmp_path):
     result = CliRunner().invoke(cli, ["--working-dir", str(tmp_path), "run"])
-    assert result.exit_code == 0
-    assert result.output == ""
+    assert result.exit_code == 1
+    assert isinstance(result.exception, ValueError)
+    assert str(result.exception) == "At least one device is required."
 
 
-def test_run_without_tests_reports_empty_resolved_tests(project):
+def test_run_without_tests_requires_device(project):
     root, _ = project
     result = CliRunner().invoke(cli, ["--working-dir", str(root), "run"])
-    assert result.exit_code == 0
-    assert result.output == ""
+    assert result.exit_code == 1
+    assert isinstance(result.exception, ValueError)
+    assert str(result.exception) == "At least one device is required."
 
 
 def test_run_discovers_default_test_directory(project):
@@ -42,7 +44,7 @@ def test_run_discovers_default_test_directory(project):
     test_file.touch()
     result = CliRunner().invoke(
         cli,
-        ["--working-dir", str(root), "run"],
+        ["--working-dir", str(root), "run", "--device", "board-1"],
     )
     assert result.exit_code == 0
     assert "check.py" in result.output
@@ -68,7 +70,7 @@ backend: debug
     )
     result = CliRunner().invoke(
         cli,
-        ["--working-dir", str(root), "run"],
+        ["--working-dir", str(root), "run", "--device", "board-1"],
     )
     assert result.exit_code == 0
     assert "check.py" in result.output
@@ -91,7 +93,9 @@ backend: debug
 """,
         encoding="utf-8",
     )
-    result = CliRunner().invoke(cli, ["--working-dir", str(root), "run"])
+    result = CliRunner().invoke(
+        cli, ["--working-dir", str(root), "run", "--device", "board-1"]
+    )
     assert result.exit_code == 0
     assert "check.py" in result.output
     assert "app.py" not in result.output
@@ -103,7 +107,14 @@ def test_run_resolves_working_directory_test(project):
     test_file.touch()
     result = CliRunner().invoke(
         cli,
-        ["--working-dir", str(root), "run", "check.py"],
+        [
+            "--working-dir",
+            str(root),
+            "run",
+            "--device",
+            "board-1",
+            "check.py",
+        ],
     )
     assert result.exit_code == 0
     assert "check.py" in result.output
@@ -116,7 +127,7 @@ def test_run_resolves_default_tests_directory_test(project):
     test_file.touch()
     result = CliRunner().invoke(
         cli,
-        ["--working-dir", str(root), "run", "check.py"],
+        ["--working-dir", str(root), "run", "--device", "board-1", "check.py"],
     )
     assert result.exit_code == 0
     assert "check.py" in result.output
@@ -132,6 +143,8 @@ def test_run_resolves_absolute_test_path(project):
             "--working-dir",
             str(root),
             "run",
+            "--device",
+            "board-1",
             str(test_file),
         ],
     )
@@ -153,6 +166,8 @@ def test_run_expands_test_glob(project):
             "--working-dir",
             str(root),
             "run",
+            "--device",
+            "board-1",
             "tests/*.py",
         ],
     )
@@ -187,6 +202,8 @@ def test_run_excludes_valid_test_input(project):
             "--working-dir",
             str(root),
             "run",
+            "--device",
+            "board-1",
             "--exclude",
             "excluded.py",
         ],
@@ -215,6 +232,8 @@ def test_run_accepts_multiple_exclusions(project):
             "--working-dir",
             str(root),
             "run",
+            "--device",
+            "board-1",
             "--exclude",
             "excluded_first.py",
             "--exclude",
@@ -240,6 +259,12 @@ def test_run_accepts_one_standard_count(project):
             "--working-dir",
             str(root),
             "run",
+            "--device",
+            "board-1",
+            "--device",
+            "board-2",
+            "--device",
+            "board-3",
             "--count",
             "3",
             "check.py",
@@ -261,6 +286,10 @@ def test_run_accepts_jobs_option(project):
             "--working-dir",
             str(root),
             "run",
+            "--device",
+            "board-1",
+            "--device",
+            "board-2",
             "--jobs",
             "2",
             "check.py",
@@ -292,13 +321,48 @@ def test_run_rejects_non_positive_jobs(project):
     assert "x>=1" in result.output
 
 
-def test_run_accepts_comma_separated_role_counts(project):
+def test_run_accepts_comma_separated_role_counts(project, monkeypatch):
     """Run accepts multiple role counts through one count option."""
     root, _ = project
     server_test = root / "server.py"
     client_test = root / "client.py"
     server_test.touch()
     client_test.touch()
+    monkeypatch.setattr(
+        "ottu.device.DeviceAccessSerial.is_connected", lambda self: True
+    )
+    monkeypatch.setattr("ottu.device.DeviceAccessSerial.acquire", lambda self: self)
+    monkeypatch.setattr(
+        "ottu.device.DeviceAccessSerial.connect",
+        lambda self, config: type(
+            "Connection",
+            (),
+            {
+                "readline": lambda self: b"",
+                "close": lambda self: None,
+            },
+        )(),
+    )
+    (root / "devs.yaml").write_text(
+        "version: 1\n"
+        "devices:\n"
+        "  - name: server\n"
+        "    uid: abcdef01\n"
+        "    features: []\n"
+        "  - name: server\n"
+        "    uid: abcdef02\n"
+        "    features: []\n"
+        "  - name: client\n"
+        "    uid: abcdef03\n"
+        "    features: []\n"
+        "  - name: client\n"
+        "    uid: abcdef04\n"
+        "    features: []\n"
+        "  - name: client\n"
+        "    uid: abcdef05\n"
+        "    features: []\n",
+        encoding="utf-8",
+    )
 
     result = CliRunner().invoke(
         cli,
@@ -306,6 +370,12 @@ def test_run_accepts_comma_separated_role_counts(project):
             "--working-dir",
             str(root),
             "run",
+            "--device",
+            "role=server,name=server",
+            "--device",
+            "role=client,name=client",
+            "--dev-list",
+            str(root / "devs.yaml"),
             "--count",
             "server=2,client=3",
             "server=server.py",
@@ -350,11 +420,33 @@ def test_run_accepts_repeated_devices(project, monkeypatch):
     assert result.exit_code == 0
 
 
-def test_run_accepts_a_device_list(project):
+def test_run_accepts_a_device_list(project, monkeypatch):
     """Run accepts a device list file path."""
     root, _ = project
     (root / "check.py").touch()
-    (root / "devs.yaml").touch()
+    (root / "devs.yaml").write_text(
+        "version: 1\n"
+        "devices:\n"
+        "  - name: board-1\n"
+        "    uid: abcdef01\n"
+        "    features: []\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "ottu.device.DeviceAccessSerial.is_connected", lambda self: True
+    )
+    monkeypatch.setattr("ottu.device.DeviceAccessSerial.acquire", lambda self: self)
+    monkeypatch.setattr(
+        "ottu.device.DeviceAccessSerial.connect",
+        lambda self, config: type(
+            "Connection",
+            (),
+            {
+                "readline": lambda self: b"",
+                "close": lambda self: None,
+            },
+        )(),
+    )
 
     result = CliRunner().invoke(
         cli,
@@ -362,8 +454,10 @@ def test_run_accepts_a_device_list(project):
             "--working-dir",
             str(root),
             "run",
+            "--device",
+            "board-1",
             "--dev-list",
-            "devs.yaml",
+            str(root / "devs.yaml"),
             "check.py",
         ],
     )
