@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 from ottu.backend import Backend
+from ottu.device import Device, DeviceAccessSerial, DeviceQuery
 from ottu.result import TestResult, TestStatus
 from ottu.suite import (
     RoleSuiteInputStrategy,
@@ -101,10 +102,10 @@ def test_assign_devices_pairs_replicas_with_distinct_devices():
     test = Test(TestPath("check.py", "check.py", None, "check.py"))
 
     tests = StandardSuiteInputStrategy._assign_devices(
-        [test], ("board-1", "board-2"), 2
+        [test], (Device(name="board-1"), Device(name="board-2")), 2
     )
 
-    assert [t.device for t in tests] == ["board-1", "board-2"]
+    assert [t.device.name for t in tests if t.device] == ["board-1", "board-2"]
 
 
 def test_assign_devices_rejects_insufficient_devices_for_replicas():
@@ -112,7 +113,76 @@ def test_assign_devices_rejects_insufficient_devices_for_replicas():
     test = Test(TestPath("check.py", "check.py", None, "check.py"))
 
     with pytest.raises(ValueError, match="needs 2 devices"):
-        StandardSuiteInputStrategy._assign_devices([test], ("board-1",), 2)
+        StandardSuiteInputStrategy._assign_devices([test], (Device(name="board-1"),), 2)
+
+
+def test_assign_devices_rejects_missing_device_for_replica():
+    """Assignment requires a device for every replica."""
+    test = Test(TestPath("check.py", "check.py", None, "check.py"))
+
+    with pytest.raises(ValueError, match="needs 1 devices"):
+        StandardSuiteInputStrategy._assign_devices([test], ())
+
+
+def test_assign_devices_rejects_missing_devices_for_replicas():
+    """Assignment requires a distinct device for every replica."""
+    test = Test(TestPath("check.py", "check.py", None, "check.py"))
+
+    with pytest.raises(ValueError, match="needs 2 devices"):
+        StandardSuiteInputStrategy._assign_devices([test], (), required_count=2)
+
+
+def test_resolve_devices_returns_all_direct_devices():
+    """Direct resolution returns every supplied device."""
+    assert StandardSuiteInputStrategy._resolve_devices(("board-1",), None) == (
+        Device.from_string("board-1"),
+    )
+
+
+def test_resolve_devices_returns_all_matching_list_devices_when_required_is_lower(
+    tmp_path, monkeypatch
+):
+    """Device-list resolution returns every unique match."""
+    available = [Device(name="board-1"), Device(name="board-2")]
+    monkeypatch.setattr(Device, "from_file", lambda _: available)
+    monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
+
+    assert StandardSuiteInputStrategy._resolve_devices(
+        ("board",), tmp_path / "devices.yml"
+    ) == tuple(available)
+
+
+def test_resolve_devices_uses_all_list_devices_without_a_query(tmp_path, monkeypatch):
+    """A device list without a query searches every available device."""
+    available = [Device(name="board-1"), Device(name="board-2")]
+    monkeypatch.setattr(Device, "from_file", lambda _: available)
+    monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
+
+    assert StandardSuiteInputStrategy._resolve_devices(
+        (), tmp_path / "devices.yml"
+    ) == tuple(available)
+
+
+def test_resolve_devices_returns_all_list_matches(tmp_path, monkeypatch):
+    """Device-list resolution leaves count validation to assignment."""
+    available = [Device(name="board-1")]
+    monkeypatch.setattr(Device, "from_file", lambda _: available)
+    monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
+
+    assert StandardSuiteInputStrategy._resolve_devices(
+        ("board",), tmp_path / "devices.yml"
+    ) == tuple(available)
+
+
+def test_resolve_devices_returns_empty_result_for_zero_required_devices(
+    tmp_path, monkeypatch
+):
+    """A zero-device request returns without requiring a list match."""
+    monkeypatch.setattr(Device, "from_file", lambda _: [])
+
+    assert (
+        StandardSuiteInputStrategy._resolve_devices((), tmp_path / "devices.yml") == ()
+    )
 
 
 def test_suite_from_inputs_resolves_tests_and_sets_mode(tmp_path):
@@ -124,6 +194,7 @@ def test_suite_from_inputs_resolves_tests_and_sets_mode(tmp_path):
 
     suite = Suite.from_inputs(
         ["server=server.py", "client=client.py"],
+        devices=("shared-device",),
         context=TestPathContext(working_dir=tmp_path),
     )
 
@@ -142,15 +213,19 @@ def test_suite_from_inputs_sets_replicated_count(tmp_path):
     test_file.touch()
 
     suite = Suite.from_inputs(
-        ["check.py"], count="3", context=TestPathContext(working_dir=tmp_path)
+        ["check.py"],
+        count="3",
+        devices=("board-1", "board-2", "board-3"),
+        context=TestPathContext(working_dir=tmp_path),
     )
 
     assert len(suite.tests) == 1
+    assert suite.tests[0].device is None
     assert suite.options.count == 3
 
 
-def test_suite_from_inputs_expands_tests_for_each_device(tmp_path):
-    """Suite construction creates one test for each test/device pair."""
+def test_suite_from_inputs_assigns_each_device_once(tmp_path):
+    """Suite construction leaves device assignment to the selected runner."""
     first_test = tmp_path / "first.py"
     second_test = tmp_path / "second.py"
     first_test.touch()
@@ -162,23 +237,20 @@ def test_suite_from_inputs_expands_tests_for_each_device(tmp_path):
         context=TestPathContext(working_dir=tmp_path),
     )
 
-    assert len(suite.tests) == 4
+    assert len(suite.tests) == 2
     assert [test.test_path.file_name for test in suite.tests] == [
         "first.py",
-        "first.py",
-        "second.py",
         "second.py",
     ]
-    assert [test.device for test in suite.tests] == [
-        "board-1",
-        "address=/dev/ttyUSB0",
-        "board-1",
-        "address=/dev/ttyUSB0",
-    ]
+    assert [test.device for test in suite.tests] == [None, None]
+    assert suite.resolved_devices == (
+        Device.from_string("board-1"),
+        Device.from_string("address=/dev/ttyUSB0"),
+    )
 
 
 def test_suite_from_inputs_pairs_count_with_distinct_devices(tmp_path):
-    """A repeated test is paired one-to-one with distinct devices."""
+    """A repeated test keeps its count and device pool unresolved."""
     (tmp_path / "check.py").touch()
 
     suite = Suite.from_inputs(
@@ -188,25 +260,62 @@ def test_suite_from_inputs_pairs_count_with_distinct_devices(tmp_path):
         context=TestPathContext(working_dir=tmp_path),
     )
 
-    assert len(suite.tests) == 2
-    assert [test.device for test in suite.tests] == ["board-1", "board-2"]
+    assert len(suite.tests) == 1
+    assert suite.tests[0].device is None
+    assert suite.resolved_devices == (
+        Device.from_string("board-1"),
+        Device.from_string("board-2"),
+    )
     assert suite.options.count == 2
 
 
-def test_suite_from_inputs_without_devices_keeps_one_test_per_file(tmp_path):
-    """Suite construction does not duplicate tests when no device is given."""
-    test_file = tmp_path / "check.py"
-    test_file.touch()
+def test_suite_from_inputs_resolves_count_devices_from_device_list(
+    tmp_path, monkeypatch
+):
+    """A device-list query resolves the pool for repeated tests."""
+    (tmp_path / "check.py").touch()
+    available = [Device(name="board-1"), Device(name="board-2")]
+    monkeypatch.setattr(Device, "from_file", lambda _: available)
+    monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
 
     suite = Suite.from_inputs(
         ["check.py"],
+        count="2",
+        devices=("board",),
+        dev_list=tmp_path / "devices.yml",
         context=TestPathContext(working_dir=tmp_path),
     )
 
-    assert len(suite.tests) == 1
-    test = suite.tests[0]
-    assert isinstance(test, Test)
-    assert test.device is None
+    assert [test.device for test in suite.tests] == [None]
+    assert suite.resolved_devices == tuple(available)
+
+
+def test_suite_from_inputs_rejects_insufficient_device_list_matches(
+    tmp_path, monkeypatch
+):
+    """Construction leaves replica capacity validation to the runner."""
+    (tmp_path / "check.py").touch()
+    monkeypatch.setattr(Device, "from_file", lambda _: [Device(name="board-1")])
+    monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
+
+    suite = Suite.from_inputs(
+        ["check.py"],
+        count="2",
+        devices=("board",),
+        dev_list=tmp_path / "devices.yml",
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert suite.resolved_devices == (Device(name="board-1"),)
+
+
+def test_suite_from_inputs_rejects_missing_devices(tmp_path):
+    """Suite construction requires a device when no list is supplied."""
+    test_file = tmp_path / "check.py"
+    test_file.touch()
+
+    with pytest.raises(ValueError, match="At least one device is required"):
+        Suite.from_inputs(["check.py"], context=TestPathContext(working_dir=tmp_path))
 
 
 def test_role_suite_from_inputs_broadcasts_one_unqualified_device(tmp_path):
@@ -221,7 +330,10 @@ def test_role_suite_from_inputs_broadcasts_one_unqualified_device(tmp_path):
     )
 
     group = suite.tests
-    assert [test.device for test in group] == ["board-1", "board-1"]
+    assert [test.device for test in group] == [
+        Device.from_string("board-1"),
+        Device.from_string("board-1"),
+    ]
 
 
 def test_role_suite_from_inputs_routes_role_qualified_devices(tmp_path):
@@ -240,9 +352,120 @@ def test_role_suite_from_inputs_routes_role_qualified_devices(tmp_path):
 
     group = suite.tests
     assert [test.device for test in group] == [
-        "role=server,address=/dev/ttyUSB0",
-        "role=client,address=/dev/ttyUSB1",
+        Device.from_string("address=/dev/ttyUSB0"),
+        Device.from_string("address=/dev/ttyUSB1"),
     ]
+
+
+def test_role_suite_from_inputs_matches_live_addresses_from_uid_list(
+    tmp_path, monkeypatch
+):
+    """Role address queries resolve UID-only devices by their live ports."""
+    (tmp_path / "uni.py").touch()
+    (tmp_path / "world.py").touch()
+    available = [
+        Device(
+            name="uni-board",
+            access=DeviceAccessSerial(address="", uid="abc123"),
+        ),
+        Device(
+            name="world-board",
+            access=DeviceAccessSerial(address="", uid="def456"),
+        ),
+    ]
+    ports = [
+        type("Port", (), {"device": "/dev/ttyACM1", "serial_number": "abc123"})(),
+        type("Port", (), {"device": "/dev/ttyACM0", "serial_number": "def456"})(),
+    ]
+    monkeypatch.setattr("ottu.device.comports", lambda: ports)
+    monkeypatch.setattr(Device, "from_file", lambda _: available)
+
+    suite = Suite.from_inputs(
+        ["uni=uni.py", "world=world.py"],
+        devices=(
+            "role=uni,address=/dev/ttyACM1",
+            "role=world,address=/dev/ttyACM0",
+        ),
+        dev_list=tmp_path / "devices.yaml",
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert [test.device for test in suite.tests] == available
+
+
+def test_role_suite_from_inputs_reserves_devices_between_roles(tmp_path, monkeypatch):
+    """A device assigned to one role is unavailable to later roles."""
+    (tmp_path / "server.py").touch()
+    (tmp_path / "client.py").touch()
+    available = [Device(name="board-1"), Device(name="board-2")]
+    monkeypatch.setattr(Device, "from_file", lambda _: available)
+    monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
+
+    suite = Suite.from_inputs(
+        ["server=server.py", "client=client.py"],
+        devices=("board",),
+        dev_list=tmp_path / "devices.yml",
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert [test.device for test in suite.tests] == available
+
+
+def test_role_suite_from_inputs_rejects_insufficient_list_devices(
+    tmp_path, monkeypatch
+):
+    """Role counts must be satisfied by distinct devices from a device list."""
+    (tmp_path / "server.py").touch()
+    available = [Device(name="board-1")]
+    monkeypatch.setattr(Device, "from_file", lambda _: available)
+    monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
+
+    with pytest.raises(ValueError, match="needs 2 devices"):
+        Suite.from_inputs(
+            ["server=server.py"],
+            count="2",
+            devices=("board",),
+            dev_list=tmp_path / "devices.yml",
+            context=TestPathContext(working_dir=tmp_path),
+        )
+
+
+def test_role_suite_from_inputs_rejects_missing_role_device(tmp_path):
+    """Each role requires a direct device when no device list is supplied."""
+    (tmp_path / "server.py").touch()
+
+    with pytest.raises(ValueError, match="Role 'server' requires a device"):
+        Suite.from_inputs(
+            ["server=server.py"], context=TestPathContext(working_dir=tmp_path)
+        )
+
+
+def test_role_suite_from_inputs_rejects_missing_role_device_from_list(
+    tmp_path, monkeypatch
+):
+    """A role with a device list still requires a role-specific query."""
+    (tmp_path / "server.py").touch()
+    monkeypatch.setattr(Device, "from_file", lambda _: [Device(name="board-1")])
+
+    with pytest.raises(ValueError, match="needs 1 connected devices"):
+        Suite.from_inputs(
+            ["server=server.py"],
+            dev_list=tmp_path / "devices.yml",
+            context=TestPathContext(working_dir=tmp_path),
+        )
+
+
+def test_role_suite_from_inputs_rejects_insufficient_direct_role_devices(tmp_path):
+    """Direct role inputs must provide enough devices for the role count."""
+    (tmp_path / "server.py").touch()
+
+    with pytest.raises(ValueError, match="needs 2 devices"):
+        Suite.from_inputs(
+            ["server=server.py"],
+            devices=("board-1",),
+            count="2",
+            context=TestPathContext(working_dir=tmp_path),
+        )
 
 
 @pytest.mark.parametrize(
@@ -290,13 +513,21 @@ def test_parse_role_devices_rejects_query_matching_multiple_roles(monkeypatch):
         )
 
 
+def test_parse_role_devices_returns_empty_mapping_without_devices():
+    """Role-device parsing leaves roles unresolved when no devices are supplied."""
+    assert RoleSuiteInputStrategy._parse_role_devices((), ("server",)) == {}
+
+
 def test_suite_from_inputs_sets_jobs(tmp_path):
     """Suite construction preserves the requested job limit."""
     test_file = tmp_path / "check.py"
     test_file.touch()
 
     suite = Suite.from_inputs(
-        ["check.py"], jobs=2, context=TestPathContext(working_dir=tmp_path)
+        ["check.py"],
+        jobs=2,
+        devices=("board-1", "board-2"),
+        context=TestPathContext(working_dir=tmp_path),
     )
 
     assert suite.options.jobs == 2
@@ -351,16 +582,21 @@ def test_suite_from_inputs_raises_when_no_strategy_matches(monkeypatch):
         Suite.from_inputs([])
 
 
-def test_suite_from_inputs_sets_role_counts(tmp_path):
+def test_suite_from_inputs_sets_role_counts(tmp_path, monkeypatch):
     """Role counts expand into that many tests in the shared role group."""
     server_test = tmp_path / "server.py"
     client_test = tmp_path / "client.py"
     server_test.touch()
     client_test.touch()
+    available = [Device(name=f"board-{index}") for index in range(5)]
+    monkeypatch.setattr(Device, "from_file", lambda _: available)
+    monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
 
     suite = Suite.from_inputs(
         ["server=server.py", "client=client.py"],
         count="server=1,client=4",
+        devices=("board",),
+        dev_list=tmp_path / "devices.yml",
         context=TestPathContext(working_dir=tmp_path),
     )
 
@@ -374,16 +610,21 @@ def test_suite_from_inputs_sets_role_counts(tmp_path):
     ]
 
 
-def test_suite_from_inputs_applies_integer_count_to_all_roles(tmp_path):
+def test_suite_from_inputs_applies_integer_count_to_all_roles(tmp_path, monkeypatch):
     """A single integer count applies to every role."""
     server_test = tmp_path / "server.py"
     client_test = tmp_path / "client.py"
     server_test.touch()
     client_test.touch()
+    available = [Device(name=f"board-{index}") for index in range(10)]
+    monkeypatch.setattr(Device, "from_file", lambda _: available)
+    monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
 
     suite = Suite.from_inputs(
         ["server=server.py", "client=client.py"],
         count="5",
+        devices=("board",),
+        dev_list=tmp_path / "devices.yml",
         context=TestPathContext(working_dir=tmp_path),
     )
 
@@ -485,6 +726,31 @@ def test_test_suite_returns_each_test_in_order(tmp_path):
     assert all(result.passed for result in results)
 
 
+def test_sequential_runner_uses_one_resolved_device_for_all_tests(monkeypatch):
+    """Sequential execution assigns one process device to every test."""
+    device = Device(name="board-1")
+    tests = [
+        Test(TestPath("first.py", "first.py", None, "first.py")),
+        Test(TestPath("second.py", "second.py", None, "second.py")),
+    ]
+    executed: list[Test] = []
+
+    monkeypatch.setattr(
+        Suite,
+        "_run_test",
+        staticmethod(lambda test, observer=None: executed.append(test)),
+    )
+
+    Suite(
+        SuiteOpts(),
+        tests,
+        runner="runner_sequential",
+        resolved_devices=(device,),
+    ).run()
+
+    assert [test.device for test in executed] == [device, device]
+
+
 def test_suite_splits_tests_into_contiguous_jobs():
     """Multiple jobs receive balanced contiguous test groups."""
     tests = [
@@ -496,6 +762,41 @@ def test_suite_splits_tests_into_contiguous_jobs():
     suite_jobs = Suite(options, tests).split(jobs=2)
 
     assert [suite_job.tests for suite_job in suite_jobs] == [tests[:3], tests[3:]]
+
+
+def test_suite_splits_disjoint_device_groups_per_job():
+    """Each repeated distributed job receives exactly its count devices."""
+    tests = [
+        Test(TestPath(f"test-{index}.py", f"test-{index}.py", None, "test.py"))
+        for index in range(4)
+    ]
+    devices = tuple(Device(name=f"board-{index}") for index in range(4))
+
+    suite_jobs = Suite(
+        SuiteOpts(jobs=2, count=2),
+        tests,
+        resolved_devices=devices,
+    ).split(jobs=2)
+
+    assert [suite_job.resolved_devices for suite_job in suite_jobs] == [
+        devices[:2],
+        devices[2:],
+    ]
+
+
+def test_suite_rejects_insufficient_devices_for_distributed_jobs():
+    """Distributed splitting rejects overlapping device assignments."""
+    tests = [
+        Test(TestPath(f"test-{index}.py", f"test-{index}.py", None, "test.py"))
+        for index in range(2)
+    ]
+
+    with pytest.raises(ValueError, match="needs 4 devices"):
+        Suite(
+            SuiteOpts(jobs=2, count=2),
+            tests,
+            resolved_devices=(Device(name="board-1"), Device(name="board-2")),
+        ).split(jobs=2)
 
 
 def test_suite_does_not_split_one_job_or_one_test():
@@ -536,6 +837,19 @@ def test_suite_runs_jobs_in_parallel(monkeypatch):
     Suite(SuiteOpts(jobs=2), tests, runner="runner_distributed").run()
 
     assert [event[0] for event in events] == ["start", "start", "join", "join"]
+
+
+def test_distributed_runner_runs_single_suite_directly(monkeypatch):
+    """Distributed execution delegates directly when splitting yields one job."""
+    test = Test(TestPath("test.py", "test.py", None, "test.py"))
+    suite = Suite(SuiteOpts(jobs=2), [test], runner="runner_distributed")
+    called = []
+
+    monkeypatch.setattr(Suite, "split", lambda self, jobs: [self])
+    monkeypatch.setattr(Suite, "run", lambda self: called.append(self) or [])
+
+    assert suite.runner_distributed() == []
+    assert called == [suite]
 
 
 def test_suite_raises_when_a_job_process_fails(monkeypatch):
@@ -654,10 +968,82 @@ def test_repeated_runner_starts_requested_process_count(monkeypatch):
         backend=backend,
     )
 
-    Suite(SuiteOpts(count=2), [first], runner="runner_repeated").run()
+    Suite(
+        SuiteOpts(count=2),
+        [first],
+        runner="runner_repeated",
+        resolved_devices=(Device(name="board-1"), Device(name="board-2")),
+    ).run()
 
-    assert [event[0] for event in events] == ["start", "start", "join", "join"]
-    assert [event[1] for event in events[:2]] == [first, first]
+    assert [event[0] for event in events] == [
+        "start",
+        "start",
+        "join",
+        "join",
+    ]
+    assert [event[1].test_path.file_name for event in events] == [
+        "first.py",
+        "first.py",
+        "first.py",
+        "first.py",
+    ]
+
+
+def test_repeated_runner_runs_each_test_file_as_a_parallel_group(monkeypatch):
+    """Repeated tests run sequentially by file, with replicas running together."""
+    events = []
+
+    class FakeProcess:
+        def __init__(self, target, args):
+            self.args = args
+            self.exitcode = 0
+
+        def start(self):
+            events.append(("start", self.args[0]))
+
+        def join(self):
+            events.append(("join", self.args[0]))
+
+    monkeypatch.setattr("ottu.suite.Process", FakeProcess)
+    backend = Backend.from_mapping({"program": "true"})
+    first = Test(
+        TestPath("first.py", "first.py", None, "first.py"),
+        TestOpts(),
+        backend=backend,
+    )
+    second = Test(
+        TestPath("second.py", "second.py", None, "second.py"),
+        TestOpts(),
+        backend=backend,
+    )
+
+    Suite(
+        SuiteOpts(count=2),
+        [first, second],
+        runner="runner_repeated",
+        resolved_devices=(Device(name="board-1"), Device(name="board-2")),
+    ).run()
+
+    assert [event[0] for event in events] == [
+        "start",
+        "start",
+        "join",
+        "join",
+        "start",
+        "start",
+        "join",
+        "join",
+    ]
+    assert [event[1].test_path.file_name for event in events] == [
+        "first.py",
+        "first.py",
+        "first.py",
+        "first.py",
+        "second.py",
+        "second.py",
+        "second.py",
+        "second.py",
+    ]
 
 
 def test_repeated_runner_routes_single_tests_through_a_sub_suite(monkeypatch):
@@ -683,10 +1069,16 @@ def test_repeated_runner_routes_single_tests_through_a_sub_suite(monkeypatch):
         backend=backend,
     )
 
-    Suite(SuiteOpts(), [second], runner="runner_repeated").run()
+    Suite(
+        SuiteOpts(),
+        [second],
+        runner="runner_repeated",
+        resolved_devices=(Device(name="board-1"),),
+    ).run()
 
     assert [event[0] for event in events] == ["start", "join"]
-    assert events[0][1] is second
+    assert events[0][1].test_path.file_name == "second.py"
+    assert events[0][1].device == Device(name="board-1")
 
 
 def test_repeated_runner_raises_when_a_process_fails(monkeypatch):
@@ -711,7 +1103,12 @@ def test_repeated_runner_raises_when_a_process_fails(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="test workers failed"):
-        Suite(SuiteOpts(count=2), [test], runner="runner_repeated").run()
+        Suite(
+            SuiteOpts(count=2),
+            [test],
+            runner="runner_repeated",
+            resolved_devices=(Device(name="board-1"), Device(name="board-2")),
+        ).run()
 
 
 def test_roled_runner_raises_when_a_process_fails(monkeypatch):
@@ -841,14 +1238,52 @@ def test_runner_repeated_queues_a_plain_test_result(monkeypatch):
         backend=backend,
     )
 
-    results = Suite(SuiteOpts(), [test], runner="runner_repeated").runner_repeated(
-        SuiteParallelTestResultObserver(FakeQueue())
-    )
+    results = Suite(
+        SuiteOpts(),
+        [test],
+        runner="runner_repeated",
+        resolved_devices=(Device(name="board-1"),),
+    ).runner_repeated(SuiteParallelTestResultObserver(FakeQueue()))
 
     assert results == []
     assert published
     assert all(item.test_name == "check.py" for item in published)
     assert published[-1].passed
+
+
+def test_run_parallel_processes_drains_live_results():
+    """Live parallel execution drains notifications while workers are running."""
+
+    class FakeProcess:
+        exitcode = 0
+
+        def start(self):
+            pass
+
+        def join(self):
+            pass
+
+    class FakeNotifier:
+        def __init__(self):
+            self.running = True
+            self.notifications = 0
+
+        @property
+        def processes_running(self):
+            return self.running
+
+        def register_process(self, process):
+            pass
+
+        def notify(self):
+            self.notifications += 1
+            self.running = False
+            return []
+
+    notifier = FakeNotifier()
+
+    assert Suite.run_parallel_processes([FakeProcess()], notifier) == []
+    assert notifier.notifications == 2
 
 
 def test_suite_parallel_notifier_tracks_registered_processes():
