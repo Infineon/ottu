@@ -5,7 +5,14 @@ import subprocess
 import pytest
 from ottu.backend import Backend
 from ottu.backend_builtins import BACKEND_BUILTINS
+from ottu.device import Device
 from ottu.result import TestStatus
+from ottu.test import Test
+from ottu.test_path import TestPath
+
+
+def make_test(name="check.py"):
+    return Test(TestPath(name, name, None, name))
 
 
 class RecordingObserver:
@@ -20,19 +27,19 @@ def test_backend_runs_rendered_commands():
     """A resolved device supplies values to backend commands."""
     backend = Backend.from_mapping(
         {
-            "build": ["arduino-cli", "compile", "--board", "{board}"],
-            "program": ["arduino-cli", "upload", "--port", "{port}"],
+            "build": ["arduino-cli", "compile", "--device", "{device}"],
+            "program": ["arduino-cli", "upload", "--name", "{name}"],
         }
     )
     commands = []
     backend.run(
-        "tests/hello-world.py",
-        {"board": "uno", "port": "/dev/ttyUSB0"},
+        make_test("tests/hello-world.py").test_path,
+        Device(name="uno"),
         run_command=lambda command, **kwargs: commands.append((command, kwargs)),
     )
     assert commands == [
         (
-            ("arduino-cli", "compile", "--board", "uno"),
+            ("arduino-cli", "compile", "--device", "uno"),
             {
                 "cwd": None,
                 "check": True,
@@ -41,7 +48,7 @@ def test_backend_runs_rendered_commands():
             },
         ),
         (
-            ("arduino-cli", "upload", "--port", "/dev/ttyUSB0"),
+            ("arduino-cli", "upload", "--name", "uno"),
             {
                 "cwd": None,
                 "check": True,
@@ -57,8 +64,8 @@ def test_backend_renders_test_path():
     backend = Backend.from_mapping({"build": ["arduino-cli", "compile", "{test_path}"]})
     commands = []
     backend.run(
-        "tests/hello_world.ino",
-        {"name": "uno"},
+        make_test("tests/hello_world.ino").test_path,
+        Device(name="uno"),
         run_command=lambda command, **kwargs: commands.append(command),
     )
 
@@ -71,17 +78,16 @@ def test_backend_notifies_observers_for_each_stage():
     observer = RecordingObserver()
 
     backend.run(
-        "tests/hello-world.py",
-        {},
+        make_test("hello-world.py").test_path,
+        Device(),
         observers=(observer,),
         run_command=lambda command, **kwargs: None,
     )
 
-    assert [(event.test_name, event.status) for event in observer.events] == [
+    assert [(event.test_path.file_name, event.status) for event in observer.events] == [
         ("hello-world.py", TestStatus.BUILDING),
         ("hello-world.py", TestStatus.FLASHING),
     ]
-    assert all(event.device is None for event in observer.events)
 
 
 def test_backend_loads_parametric_yaml(tmp_path):
@@ -111,8 +117,8 @@ def test_debug_backend_echoes_device_commands():
     commands = []
 
     backend.run(
-        "tests/test-device.py",
-        {"device": "test-device"},
+        make_test("tests/test-device.py").test_path,
+        Device(name="test-device"),
         run_command=lambda command, **kwargs: commands.append((command, kwargs)),
     )
 
@@ -141,20 +147,20 @@ def test_debug_backend_echoes_device_commands():
 def test_backend_can_omit_build():
     """A backend can provide only programming for prebuilt firmware."""
     backend = Backend.from_mapping(
-        {"program": ["mpremote", "connect", "{port}", "run", "main.py"]}
+        {"program": ["mpremote", "connect", "{name}", "run", "main.py"]}
     )
     commands = []
 
     backend.run(
-        "tests/hello-world.py",
-        {"port": "/dev/ttyUSB0"},
+        make_test("tests/hello-world.py").test_path,
+        Device(name="uno"),
         run_command=lambda command, **kwargs: commands.append((command, kwargs)),
     )
 
     assert backend.build is None
     assert commands == [
         (
-            ("mpremote", "connect", "/dev/ttyUSB0", "run", "main.py"),
+            ("mpremote", "connect", "uno", "run", "main.py"),
             {
                 "cwd": None,
                 "check": True,
