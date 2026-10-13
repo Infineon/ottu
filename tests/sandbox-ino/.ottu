@@ -9,5 +9,5 @@ test_include_patterns:
   - "**/*.ino"
 
 test_exclude_patterns: 
-  - "*.exp"
+  - "**/*.exp"
  
