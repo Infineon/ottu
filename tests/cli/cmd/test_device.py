@@ -108,7 +108,7 @@ def test_device_query_rejects_invalid_json_filter(dev_list):
     assert "invalid JSON" in result.output
 
 
-def test_device_query_prints_requested_key(dev_list):
+def test_device_query_resolves_connected_addresses(dev_list):
     result = invoke("address", "--dev-list", str(dev_list))
 
     assert result.exit_code == 0
