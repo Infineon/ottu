@@ -24,3 +24,6 @@ env/
 .env
 .env.local
 *.log
+/results/
+/tests/results/
+secrets.h
