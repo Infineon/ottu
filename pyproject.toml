@@ -75,6 +75,8 @@ docs-dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Tests are plain functions; application classes named Test* must not be collected.
+python_classes = []
 addopts = "--cov=ottu --cov-report=xml --cov-report=html --cov-report=term-missing"
 
 [tool.coverage.run]
