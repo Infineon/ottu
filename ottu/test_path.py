@@ -13,9 +13,6 @@ from ottu.config_models.project.config import ProjectConfig
 class TestPath:
     """A resolved test path with its useful path representations."""
 
-    # Prevent pytest from collecting this application class as a test class.
-    __test__ = False
-
     absolute_path: Path
     working_dir_relative_path: Path
     project_root_relative_path: Path | None
@@ -25,8 +22,6 @@ class TestPath:
 @dataclass(frozen=True)
 class TestPathContext:
     """Context used to resolve test selectors into paths."""
-
-    __test__ = False
 
     working_dir: str | Path = field(default_factory=Path.cwd)
     project_root: str | Path | None = None
