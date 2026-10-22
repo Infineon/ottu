@@ -1,136 +1,45 @@
-"""Serial test output tests."""
+"""Test result tests."""
 
-import pytest
-from ottu.result import ExpectedOutputParser, TestOutput, TestOutputParser, TestStatus
-
-
-class FakeSerial:
-    def __init__(self, lines):
-        self.lines = iter(lines)
-        self.closed = False
-
-    def readline(self):
-        return next(self.lines, b"")
-
-    def close(self):
-        self.closed = True
+from ottu.output import TestOutcome, TestOutput
+from ottu.result import TestResult, TestStatus
+from ottu.test_path import TestPath
 
 
-class LowercaseOutputParser(TestOutputParser):
-    def line_parser(self, line: bytes) -> str:
-        return line.decode().strip().lower()
-
-    def all_lines_parser(self, lines: list[str]) -> TestOutput:
-        status = TestStatus.PASSED if lines[-1] == "pass" else None
-        return TestOutput(tuple(lines), status)
-
-
-class TerminalStatusOutputParser(TestOutputParser):
-    def all_lines_parser(self, lines: list[str]) -> TestOutput:
-        status = None
-        for line in lines:
-            normalized_line = line.strip().upper()
-            if normalized_line == TestStatus.PASSED.value:
-                status = TestStatus.PASSED
-            elif normalized_line == TestStatus.FAILED.value:
-                status = TestStatus.FAILED
-        return TestOutput(tuple(lines), status)
-
-
-def test_test_output_reads_parses_and_prints_serial_output():
-    connection = FakeSerial([b"ready\r\n", b"PASS\n"])
-
-    output = LowercaseOutputParser(idle_timeout=0).parse(connection)
-
-    assert output.lines == ("ready", "pass")
-    assert output.status is TestStatus.PASSED
-
-
-def test_test_output_returns_device_reported_failure():
-    connection = FakeSerial([b"FAIL\n"])
-
-    output = TerminalStatusOutputParser(idle_timeout=0).parse(connection)
-
-    assert output.lines == ("FAIL",)
-    assert output.status is TestStatus.FAILED
-
-
-def test_expected_output_parser_passes_matching_output(tmp_path):
-    expected_output = tmp_path / "check.py.exp"
-    expected_output.write_text("ready\nPASS\n", encoding="utf-8")
-    connection = FakeSerial([b"ready\n", b"PASS\n"])
-
-    output = ExpectedOutputParser(expected_output, idle_timeout=0).parse(connection)
-
-    assert output == TestOutput(("ready\n", "PASS\n"), TestStatus.PASSED)
-
-
-def test_expected_output_parser_fails_different_output(tmp_path):
-    expected_output = tmp_path / "check.py.exp"
-    expected_output.write_text("ready\nPASS\n", encoding="utf-8")
-    connection = FakeSerial([b"ready\n", b"FAIL\n"])
-
-    output = ExpectedOutputParser(expected_output, idle_timeout=0).parse(connection)
-
-    assert output == TestOutput(("ready\n", "FAIL\n"), TestStatus.FAILED)
-
-
-def test_expected_output_parser_preserves_line_ending_semantics(tmp_path):
-    expected_output = tmp_path / "check.py.exp"
-    expected_output.write_bytes(b"ready\r\n")
-
-    output = ExpectedOutputParser(expected_output, idle_timeout=0).parse(
-        FakeSerial([b"ready\n"])
+def make_result(status, outcome=None):
+    return TestResult(
+        TestPath("check.py", "check.py", None, "check.py"),
+        status,
+        output=TestOutput((), outcome) if outcome is not None else None,
     )
 
-    assert output.status is TestStatus.FAILED
+
+def test_result_passes_only_with_passing_outcome():
+    assert make_result(TestStatus.DONE, TestOutcome.PASS).passed
+    assert not make_result(TestStatus.DONE, TestOutcome.FAIL).passed
+    assert not make_result(TestStatus.DONE, TestOutcome.UNVERIFIED).passed
 
 
-def test_expected_output_parser_uses_test_path_exp_file(tmp_path):
-    test_path = tmp_path / "check.py"
-    expected_output = tmp_path / "check.py.exp"
-    expected_output.write_text("ready\n", encoding="utf-8")
-
-    parser = TestOutputParser.from_test_path(test_path, idle_timeout=0)
-    output = parser.parse(FakeSerial([b"ready\n"]))
-
-    assert output.status is TestStatus.PASSED
+def test_result_without_outcome_has_not_passed():
+    assert not make_result(TestStatus.EXECUTING).passed
 
 
-def test_test_output_parser_factory_uses_default_without_exp_file(tmp_path):
-    parser = TestOutputParser.from_test_path(tmp_path / "check.py", idle_timeout=0)
-
-    assert type(parser) is TestOutputParser
-
-
-def test_test_output_default_parser_decodes_invalid_bytes():
-    connection = FakeSerial([b"ready\xff\n"])
-
-    output = TestOutputParser(idle_timeout=0).parse(connection)
-
-    assert output.lines == ("ready\ufffd",)
-    assert output.status is None
+def test_result_outcome_comes_from_its_output():
+    assert make_result(TestStatus.DONE, TestOutcome.FAIL).outcome is TestOutcome.FAIL
+    assert make_result(TestStatus.DONE, TestOutcome.UNVERIFIED).outcome is (
+        TestOutcome.UNVERIFIED
+    )
 
 
-def test_test_output_waits_through_empty_reads():
-    connection = FakeSerial([b"first\n", b"", b"second\n", b""])
-    clock_values = iter((0.0, 0.0, 1.0, 1.0, 2.0, 6.0))
-
-    output = TestOutputParser(
-        idle_timeout=5.0,
-        clock=lambda: next(clock_values),
-    ).parse(connection)
-
-    assert output.lines == ("first", "second")
+def test_result_has_no_outcome_before_it_has_output():
+    assert make_result(TestStatus.EXECUTING).outcome is None
 
 
-def test_test_output_propagates_reading_failure():
-    connection = FakeSerial([])
+def test_result_has_no_outcome_while_its_output_is_not_judged():
+    result = TestResult(
+        TestPath("check.py", "check.py", None, "check.py"),
+        TestStatus.EXECUTING,
+        output=TestOutput(("partial",)),
+    )
 
-    def fail_readline():
-        raise RuntimeError("serial read failed")
-
-    connection.readline = fail_readline
-
-    with pytest.raises(RuntimeError, match="serial read failed"):
-        TestOutputParser(idle_timeout=0).parse(connection)
+    assert result.outcome is None
+    assert not result.passed
