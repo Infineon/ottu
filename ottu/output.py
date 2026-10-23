@@ -181,7 +181,7 @@ class TestOutputOpts:
         return FramedOutputOpts.target_build_args(self.framed_output_opts)
 
 
-class TestOutcome(str, Enum):
+class TestResult(str, Enum):
     """
     Verdict of a finished test.
     """
@@ -194,14 +194,14 @@ class TestOutcome(str, Enum):
 @dataclass(frozen=True)
 class TestOutput:
     """
-    Captured output and the outcome interpreted from it.
+    Captured output and the result interpreted from it.
 
-    The outcome is ``None`` while no verdict exists yet, and ``UNVERIFIED`` when
+    The result is ``None`` while no verdict exists yet, and ``UNVERIFIED`` when
     the output was read but could not be judged.
     """
 
     lines: tuple[str, ...]
-    outcome: TestOutcome | None = None
+    result: TestResult | None = None
 
 
 Clock = Callable[[], float]
@@ -237,7 +237,7 @@ class TestOutputParser:
         return UnityOutputParser(opts, clock=clock)
 
     def parse(self, connection: DeviceConnection) -> TestOutput:
-        """Read output until the frame ends or idle, and return the outcome.
+        """Read output until the frame ends or idle, and return the result.
 
         A delimited frame that never ends is a truncated run and fails.
         """
@@ -260,7 +260,7 @@ class TestOutputParser:
         if pending and not frame.ended:
             frame.feed(self.line_parser(pending))
         if frame.truncated:
-            return TestOutput(frame.lines, TestOutcome.FAIL)
+            return TestOutput(frame.lines, TestResult.FAIL)
         return self.all_lines_parser(list(frame.lines))
 
     def line_parser(self, line: bytes) -> str:
@@ -269,7 +269,7 @@ class TestOutputParser:
 
     def all_lines_parser(self, lines: list[str]) -> TestOutput:
         """Parse captured lines into a test output that cannot be judged."""
-        return TestOutput(tuple(lines), TestOutcome.UNVERIFIED)
+        return TestOutput(tuple(lines), TestResult.UNVERIFIED)
 
 
 @dataclass(frozen=True)
@@ -295,12 +295,10 @@ class ExpectedOutputParser(TestOutputParser):
             for line in expected_output.read().splitlines(keepends=True):
                 expected_frame.feed(line)
         output_lines = tuple(lines)
-        outcome = (
-            TestOutcome.PASS
-            if output_lines == expected_frame.lines
-            else TestOutcome.FAIL
+        result = (
+            TestResult.PASS if output_lines == expected_frame.lines else TestResult.FAIL
         )
-        return TestOutput(output_lines, outcome)
+        return TestOutput(output_lines, result)
 
 
 class UnityOutputParser(TestOutputParser):
@@ -311,7 +309,7 @@ class UnityOutputParser(TestOutputParser):
     )
 
     def all_lines_parser(self, lines: list[str]) -> TestOutput:
-        """Derive the outcome from the Unity summary line.
+        """Derive the result from the Unity summary line.
 
         Without a summary, output that was explicitly requested as Unity fails,
         while auto-detected output is unverified.
@@ -323,12 +321,10 @@ class UnityOutputParser(TestOutputParser):
         ]
         if not summaries:
             missing_summary = (
-                TestOutcome.FAIL
+                TestResult.FAIL
                 if self.opts.parser is OutputParserType.UNITY
-                else TestOutcome.UNVERIFIED
+                else TestResult.UNVERIFIED
             )
             return TestOutput(tuple(lines), missing_summary)
-        outcome = (
-            TestOutcome.FAIL if int(summaries[-1].group(2)) > 0 else TestOutcome.PASS
-        )
-        return TestOutput(tuple(lines), outcome)
+        result = TestResult.FAIL if int(summaries[-1].group(2)) > 0 else TestResult.PASS
+        return TestOutput(tuple(lines), result)

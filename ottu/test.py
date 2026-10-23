@@ -4,10 +4,10 @@ from dataclasses import dataclass, field
 from ottu.backend import Backend
 from ottu.device import Device
 from ottu.output import (
-    TestOutcome,
     TestOutput,
     TestOutputOpts,
     TestOutputParser,
+    TestResult,
 )
 from ottu.report import TestReport, TestReportObserver, TestStatus
 from ottu.test_path import TestPath, TestPathContext, TestPathResolver
@@ -98,7 +98,7 @@ class Test:
             if connection is not None:
                 connection.close()
         if output is None:
-            output = TestOutput((), TestOutcome.PASS)
+            output = TestOutput((), TestResult.PASS)
         return self._notify(TestStatus.DONE, output=output)
 
     def _notify(

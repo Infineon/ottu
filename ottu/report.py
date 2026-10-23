@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Protocol
 
 from ottu.device import Device
-from ottu.output import TestOutcome, TestOutput
+from ottu.output import TestOutput, TestResult
 from ottu.test_path import TestPath
 
 
@@ -37,14 +37,14 @@ class TestReport:
     job_id: str | None = None
 
     @property
-    def outcome(self) -> TestOutcome | None:
+    def result(self) -> TestResult | None:
         """The verdict of the test, if its output has been interpreted."""
-        return self.output.outcome if self.output is not None else None
+        return self.output.result if self.output is not None else None
 
     @property
     def passed(self) -> bool:
-        """Whether the test finished with a passing outcome."""
-        return self.outcome is TestOutcome.PASS
+        """Whether the test finished with a passing result."""
+        return self.result is TestResult.PASS
 
 
 class TestReportObserver(Protocol):
