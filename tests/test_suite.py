@@ -1,21 +1,17 @@
 """Tests for suite input classification."""
 
-import queue
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from ottu.backend import Backend
 from ottu.device import Device, DeviceAccessSerial, DeviceQuery
-from ottu.report import TestReport, TestStatus
+from ottu.report import QueueTestReportObserver, TestReport
 from ottu.suite import (
     RoleSuiteInputStrategy,
     StandardSuiteInputStrategy,
     Suite,
     SuiteInputStrategy,
     SuiteOpts,
-    SuiteParallelTestReportNotifier,
-    SuiteParallelTestReportObserver,
 )
 from ottu.test import Test, TestOpts, TestPath, TestPathContext, TestPathResolver
 
@@ -1173,25 +1169,10 @@ def test_run_test_queues_a_report_with_job_id():
         backend=backend,
     )
 
-    Suite._run_test(test, SuiteParallelTestReportObserver(FakeQueue(), "1"))
+    Suite._run_test(test, QueueTestReportObserver(FakeQueue(), "1"))
 
     assert published
     assert published[-1].job_id == "1"
-
-
-def test_queue_observer_publishes_report_with_job_id():
-    """The child queue observer tags reports with their job id."""
-    queued = []
-
-    class FakeQueue:
-        def put(self, report):
-            queued.append(report)
-
-    report = make_report("check.py", TestStatus.BUILDING)
-
-    SuiteParallelTestReportObserver(FakeQueue(), "1").report_changed(report)
-
-    assert queued == [make_report("check.py", TestStatus.BUILDING, job_id="1")]
 
 
 def test_run_job_queues_a_plain_test_report():
@@ -1210,7 +1191,7 @@ def test_run_job_queues_a_plain_test_report():
     )
 
     reports = Suite(SuiteOpts(), [test]).runner_sequential(
-        SuiteParallelTestReportObserver(FakeQueue())
+        QueueTestReportObserver(FakeQueue())
     )
 
     assert len(reports) == 1
@@ -1252,7 +1233,7 @@ def test_runner_repeated_queues_a_plain_test_report(monkeypatch):
         [test],
         runner="runner_repeated",
         resolved_devices=(Device(name="board-1"),),
-    ).runner_repeated(SuiteParallelTestReportObserver(FakeQueue()))
+    ).runner_repeated(QueueTestReportObserver(FakeQueue()))
 
     assert reports == []
     assert published
@@ -1293,55 +1274,3 @@ def test_run_parallel_processes_drains_live_reports():
 
     assert Suite.run_parallel_processes([FakeProcess()], notifier) == []
     assert notifier.notifications == 2
-
-
-def test_suite_parallel_notifier_tracks_registered_processes():
-    """The notifier reports whether registered processes are running."""
-
-    class FakeProcess:
-        def __init__(self, running):
-            self.running = running
-
-        def is_alive(self):
-            return self.running
-
-    notifier = SuiteParallelTestReportNotifier()
-    notifier.register_process(FakeProcess(False))
-    assert not notifier.processes_running
-
-    notifier.register_process(FakeProcess(True))
-    assert notifier.processes_running
-
-
-def test_suite_parallel_notifier_queues_labeled_report():
-    """The notifier forwards labeled reports to final observers."""
-
-    class FakeQueue:
-        def __init__(self, report):
-            self.report = report
-
-        def get_nowait(self):
-            if self.report is None:
-                raise queue.Empty
-            report = self.report
-            self.report = None
-            return report
-
-    class RecordingObserver:
-        def __init__(self):
-            self.reports = []
-
-        def report_changed(self, report):
-            self.reports.append(report)
-
-    report = make_report("check.py", TestStatus.BUILDING)
-    recording_observer = RecordingObserver()
-    notifier = SuiteParallelTestReportNotifier(
-        (recording_observer,),
-        event_queue=FakeQueue(replace(report, job_id="1")),
-    )
-    notifier.notify()
-
-    assert recording_observer.reports == [
-        make_report("check.py", TestStatus.BUILDING, job_id="1")
-    ]
