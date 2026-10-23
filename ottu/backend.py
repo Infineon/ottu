@@ -18,12 +18,44 @@ from ottu.result import TestResult, TestResultObserver, TestStatus
 from ottu.test_path import TestPath
 
 
+class BackendCommandError(subprocess.CalledProcessError):
+    """A backend command failed; its message ends with the command's output.
+
+    This is a ``CalledProcessError`` with the same constructor, so existing
+    handlers and attributes keep working; only the message gains the last lines
+    of the output, which is otherwise captured and lost.
+    """
+
+    OUTPUT_TAIL_LINES = 20
+
+    def __str__(self) -> str:
+        message = super().__str__()
+        output = self.output if self.output is not None else b""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        lines = str(output).strip().splitlines()
+        if not lines:
+            return message
+        tail = lines[-self.OUTPUT_TAIL_LINES :]
+        omitted = len(lines) - len(tail)
+        heading = f"Command output (last {len(tail)} lines):"
+        if omitted:
+            heading = f"Command output (last {len(tail)} of {len(lines)} lines):"
+        return "\n".join([message, heading, *tail])
+
+
 @dataclass(frozen=True)
 class Backend:
-    """A YAML-defined backend with optional build and program commands."""
+    """A YAML-defined backend with optional build and program commands.
+
+    ``define_prefix`` is written in front of every build define that fills the
+    ``{defines}`` placeholder: ``-D`` for most compilers, or something else
+    (even empty) for toolchains that take defines another way.
+    """
 
     build: tuple[str, ...] | None = None
     program: tuple[str, ...] | None = None
+    define_prefix: str = "-D"
 
     @classmethod
     def load(cls, project_root: str | Path | None = None) -> Backend:
@@ -62,7 +94,10 @@ class Backend:
         }
         if not commands:
             raise ValueError("Backend must define at least one command.")
-        return cls(**commands)
+        define_prefix = raw_steps.get("define_prefix", cls.define_prefix)
+        if not isinstance(define_prefix, str):
+            raise ValueError("Backend 'define_prefix' must be a string.")
+        return cls(**commands, define_prefix=define_prefix)
 
     @staticmethod
     def _parse_command(name: str, value: str | Sequence[str]) -> tuple[str, ...]:
@@ -80,33 +115,63 @@ class Backend:
         working_dir: str | Path | None = None,
         run_command: Callable[..., Any] = subprocess.run,
         observers: Sequence[TestResultObserver] = (),
+        defines: Sequence[str] = (),
     ) -> None:
-        """Run backend commands for a resolved device."""
+        """Run backend commands for a resolved device.
+
+        ``defines`` are bare ``NAME=value`` strings for the build step only. They
+        fill the ``{defines}`` placeholder, and a build command without it
+        ignores them.
+        """
         variables = device.backend_variables()
         variables.setdefault("device", "")
         variables["test_path"] = str(test_path.absolute_path)
-        for configured_command, status in (
-            (self.build, TestStatus.BUILDING),
-            (self.program, TestStatus.FLASHING),
+        for configured_command, status, step_defines in (
+            (self.build, TestStatus.BUILDING, defines),
+            (self.program, TestStatus.FLASHING, ()),
         ):
             if configured_command is None:
                 continue
-            command = tuple(
-                argument.format_map(variables) for argument in configured_command
-            )
+            command = self._render(configured_command, variables, step_defines)
             self._notify(
                 observers,
                 test_path,
                 status,
                 device=device,
             )
-            run_command(
-                command,
-                cwd=working_dir,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
+            try:
+                run_command(
+                    command,
+                    cwd=working_dir,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                )
+            except subprocess.CalledProcessError as error:
+                raise BackendCommandError(
+                    error.returncode, error.cmd, error.output, error.stderr
+                ) from error
+
+    def _render(
+        self,
+        command: tuple[str, ...],
+        variables: Mapping[str, str],
+        defines: Sequence[str],
+    ) -> tuple[str, ...]:
+        """Render the placeholders of a command, expanding ``{defines}``.
+
+        Alone as an argument, ``{defines}`` becomes one argument per define;
+        inside a larger argument the defines are joined with spaces.
+        """
+        rendered_defines = [f"{self.define_prefix}{define}" for define in defines]
+        values = {**variables, "defines": " ".join(rendered_defines)}
+        arguments: list[str] = []
+        for argument in command:
+            if argument == "{defines}":
+                arguments.extend(rendered_defines)
+            else:
+                arguments.append(argument.format_map(values))
+        return tuple(arguments)
 
     @staticmethod
     def _notify(
