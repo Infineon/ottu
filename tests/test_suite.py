@@ -2,6 +2,7 @@
 
 import queue
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from ottu.backend import Backend
@@ -901,7 +902,7 @@ def test_suite_runs_plain_tests_directly(monkeypatch):
     monkeypatch.setattr("ottu.suite.Process", FakeProcess)
     backend = Backend.from_mapping({"program": "true"})
     test = Test(
-        TestPath("first.py", "first.py", None, "first.py"),
+        TestPath(Path("first.py"), Path("first.py"), None, "first.py"),
         TestOpts(),
         backend=backend,
     )
@@ -1167,7 +1168,7 @@ def test_run_test_queues_a_result_with_job_id():
 
     backend = Backend.from_mapping({"program": "true"})
     test = Test(
-        TestPath("check.py", "check.py", None, "check.py"),
+        TestPath(Path("check.py"), Path("check.py"), None, "check.py"),
         TestOpts(),
         backend=backend,
     )
@@ -1203,7 +1204,7 @@ def test_run_job_queues_a_plain_test_result():
 
     backend = Backend.from_mapping({"program": "true"})
     test = Test(
-        TestPath("check.py", "check.py", None, "check.py"),
+        TestPath(Path("check.py"), Path("check.py"), None, "check.py"),
         TestOpts(),
         backend=backend,
     )
@@ -1241,7 +1242,7 @@ def test_runner_repeated_queues_a_plain_test_result(monkeypatch):
     monkeypatch.setattr("ottu.suite.Process", FakeProcess)
     backend = Backend.from_mapping({"program": "true"})
     test = Test(
-        TestPath("check.py", "check.py", None, "check.py"),
+        TestPath(Path("check.py"), Path("check.py"), None, "check.py"),
         TestOpts(),
         backend=backend,
     )
