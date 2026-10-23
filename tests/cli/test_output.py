@@ -1,4 +1,4 @@
-"""Tests for CLI test-result reporting."""
+"""Tests for CLI test-report reporting."""
 
 from io import StringIO
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 from ottu.cli.output import CliOutput, TestOutputWriter
 from ottu.device import Device
 from ottu.output import TestOutcome, TestOutput
-from ottu.result import TestResult, TestStatus
+from ottu.report import TestReport, TestStatus
 from ottu.test import Test
 from ottu.test_path import TestPath
 from rich.console import Console
@@ -20,9 +20,9 @@ def make_test(name, device=None):
     return Test(TestPath(path, path, None, path.name), device=device)
 
 
-def make_result(name, outcome, device=None):
+def make_report(name, outcome, device=None):
     test = make_test(name, device)
-    return TestResult(
+    return TestReport(
         test.test_path,
         TestStatus.DONE,
         device=test.device,
@@ -30,43 +30,43 @@ def make_result(name, outcome, device=None):
     )
 
 
-def test_test_result_prints_pass(capsys):
-    CliOutput.report(make_result("check.py", TestOutcome.PASS))
+def test_test_report_prints_pass(capsys):
+    CliOutput.report(make_report("check.py", TestOutcome.PASS))
 
     output = capsys.readouterr().out
     assert "check.py" in output
     assert "PASS" in output
 
 
-def test_test_result_prints_fail(capsys):
-    CliOutput.report(make_result("check.py", TestOutcome.FAIL))
+def test_test_report_prints_fail(capsys):
+    CliOutput.report(make_report("check.py", TestOutcome.FAIL))
 
     output = capsys.readouterr().out
     assert "check.py" in output
     assert "FAIL" in output
 
 
-def test_test_result_prints_unverified(capsys):
-    CliOutput.report(make_result("check.py", TestOutcome.UNVERIFIED))
+def test_test_report_prints_unverified(capsys):
+    CliOutput.report(make_report("check.py", TestOutcome.UNVERIFIED))
 
     output = capsys.readouterr().out
     assert "check.py" in output
     assert "UNVERIFIED" in output
 
 
-def test_unverified_result_is_yellow():
-    result = make_result("check.py", TestOutcome.UNVERIFIED)
+def test_unverified_report_is_yellow():
+    report = make_report("check.py", TestOutcome.UNVERIFIED)
 
-    text = CliOutput._result_text(result, CliOutput._column_widths([result]))
+    text = CliOutput._report_text(report, CliOutput._column_widths([report]))
 
     assert text.spans[-1].style == "yellow"
 
 
-def test_report_all_prints_each_result(capsys):
+def test_report_all_prints_each_report(capsys):
     CliOutput.report_all(
         [
-            make_result("first.py", TestOutcome.PASS),
-            make_result("second.py", TestOutcome.FAIL),
+            make_report("first.py", TestOutcome.PASS),
+            make_report("second.py", TestOutcome.FAIL),
         ]
     )
 
@@ -82,7 +82,7 @@ def test_output_writer_saves_test_output_under_relative_path(tmp_path):
         Path("tests/nested/check.py"),
         "check.py",
     )
-    result = TestResult(
+    report = TestReport(
         test_path,
         TestStatus.DONE,
         output=TestOutput(
@@ -92,7 +92,7 @@ def test_output_writer_saves_test_output_under_relative_path(tmp_path):
 
     (tmp_path / "tests").mkdir()
 
-    TestOutputWriter(tmp_path).result_changed(result)
+    TestOutputWriter(tmp_path).report_changed(report)
 
     assert (tmp_path / "tests" / "results" / "nested" / "check.py.out").read_text(
         encoding="utf-8"
@@ -104,7 +104,7 @@ def test_output_writer_uses_test_dirs_from_project_config(tmp_path):
         "version: 1\ntest_dirs: [fixtures]\nbackend: debug\n", encoding="utf-8"
     )
     (tmp_path / "fixtures").mkdir()
-    result = TestResult(
+    report = TestReport(
         TestPath(
             tmp_path / "fixtures" / "wifi" / "ap.ino",
             Path("fixtures/wifi/ap.ino"),
@@ -115,7 +115,7 @@ def test_output_writer_uses_test_dirs_from_project_config(tmp_path):
         output=TestOutput(("OK\n",), TestOutcome.PASS),
     )
 
-    TestOutputWriter(tmp_path, tmp_path).result_changed(result)
+    TestOutputWriter(tmp_path, tmp_path).report_changed(report)
 
     assert (tmp_path / "fixtures" / "results" / "wifi" / "ap.ino.out").read_text(
         encoding="utf-8"
@@ -123,7 +123,7 @@ def test_output_writer_uses_test_dirs_from_project_config(tmp_path):
 
 
 def test_output_writer_uses_project_relative_path_outside_working_dir(tmp_path):
-    result = TestResult(
+    report = TestReport(
         TestPath(
             tmp_path / "project" / "tests" / "check.py",
             Path("../project/tests/check.py"),
@@ -134,7 +134,7 @@ def test_output_writer_uses_project_relative_path_outside_working_dir(tmp_path):
         output=TestOutput(("FAIL\n",), TestOutcome.FAIL),
     )
 
-    TestOutputWriter(tmp_path).result_changed(result)
+    TestOutputWriter(tmp_path).report_changed(report)
 
     assert (tmp_path / "results" / "tests" / "check.py.out").read_text(
         encoding="utf-8"
@@ -143,21 +143,21 @@ def test_output_writer_uses_project_relative_path_outside_working_dir(tmp_path):
 
 def test_output_writer_keeps_one_line_per_stripped_output_line(tmp_path):
     test_path = TestPath(tmp_path / "check.py", Path("check.py"), None, "check.py")
-    result = TestResult(
+    report = TestReport(
         test_path,
         TestStatus.DONE,
         output=TestOutput(("TEST(a) PASS", "kept\r\n", "OK"), TestOutcome.PASS),
     )
 
-    TestOutputWriter(tmp_path).result_changed(result)
+    TestOutputWriter(tmp_path).report_changed(report)
 
     assert (tmp_path / "results" / "check.py.out").read_bytes() == (
         b"TEST(a) PASS\nkept\r\nOK\n"
     )
 
 
-def test_result_changed_renders_the_result(capsys):
-    CliOutput().result_changed(make_result("check.py", TestOutcome.PASS))
+def test_report_changed_renders_the_report(capsys):
+    CliOutput().report_changed(make_report("check.py", TestOutcome.PASS))
 
     assert "PASS" in capsys.readouterr().out
 
@@ -178,7 +178,7 @@ def test_output_writer_uses_test_dir_of_a_separate_project_root(tmp_path):
     working_dir = project / "sub"
     working_dir.mkdir(parents=True)
     (project / "tests").mkdir()
-    result = TestResult(
+    report = TestReport(
         TestPath(
             project / "tests" / "check.py",
             Path("../tests/check.py"),
@@ -189,35 +189,35 @@ def test_output_writer_uses_test_dir_of_a_separate_project_root(tmp_path):
         output=TestOutput(("OK\n",), TestOutcome.PASS),
     )
 
-    TestOutputWriter(working_dir, project).result_changed(result)
+    TestOutputWriter(working_dir, project).report_changed(report)
 
     assert (project / "tests" / "results" / "check.py.out").read_text(
         encoding="utf-8"
     ) == "OK\n"
 
 
-def test_output_writer_ignores_incomplete_results(tmp_path):
+def test_output_writer_ignores_incomplete_reports(tmp_path):
     test_path = TestPath(tmp_path / "check.py", Path("check.py"), None, "check.py")
     writer = TestOutputWriter(tmp_path)
 
-    writer.result_changed(
-        TestResult(
+    writer.report_changed(
+        TestReport(
             test_path,
             TestStatus.EXECUTING,
             output=TestOutput(("partial\n",), TestOutcome.UNVERIFIED),
         )
     )
-    writer.result_changed(TestResult(test_path, TestStatus.DONE))
+    writer.report_changed(TestReport(test_path, TestStatus.DONE))
 
     assert not (tmp_path / "results").exists()
 
 
-def test_report_all_sizes_columns_to_longest_result():
+def test_report_all_sizes_columns_to_longest_report():
     output = StringIO()
     CliOutput.report_all(
         [
-            make_result("short.py", TestOutcome.PASS, device="one"),
-            make_result(
+            make_report("short.py", TestOutcome.PASS, device="one"),
+            make_report(
                 "hello-universe.ino",
                 TestOutcome.FAIL,
                 device="infineon:psoc6:cy8ckit_062s2_ai",
@@ -230,21 +230,21 @@ def test_report_all_sizes_columns_to_longest_result():
     assert "hello-universe.ino" in output.getvalue()
     widths = CliOutput._column_widths(
         [
-            make_result("short.py", TestOutcome.PASS, device="one"),
-            make_result(
+            make_report("short.py", TestOutcome.PASS, device="one"),
+            make_report(
                 "hello-universe.ino",
                 TestOutcome.FAIL,
                 device="infineon:psoc6:cy8ckit_062s2_ai",
             ),
         ]
     )
-    text = CliOutput._result_text(
-        make_result("short.py", TestOutcome.PASS, device="one"), widths
+    text = CliOutput._report_text(
+        make_report("short.py", TestOutcome.PASS, device="one"), widths
     ).plain
     assert text.endswith("\t\t\t\t\t\tPASS")
 
 
-def test_progress_sizes_columns_to_longest_result(monkeypatch):
+def test_progress_sizes_columns_to_longest_report(monkeypatch):
     class FakeLive:
         def __init__(self, renderable, **kwargs):
             self.renderable = renderable
@@ -322,8 +322,8 @@ def test_progress_keeps_spinner_across_execution_stages(monkeypatch):
 
     assert spinner is not None
     assert spinner.name == "dots6"
-    assert progress._results[0].status is TestStatus.DONE
-    assert progress._results[0].outcome is TestOutcome.PASS
+    assert progress._reports[0].status is TestStatus.DONE
+    assert progress._reports[0].outcome is TestOutcome.PASS
     assert len(events[2][1].rows) == 1
     assert [event[0] for event in events] == [
         "create",
@@ -374,7 +374,7 @@ def test_progress_stop_clears_active_spinner(monkeypatch):
     assert progress._spinners == {}
 
 
-def test_progress_keeps_multiple_results_in_one_live_render(monkeypatch):
+def test_progress_keeps_multiple_reports_in_one_live_render(monkeypatch):
     renders = []
 
     class FakeLive:
@@ -396,7 +396,7 @@ def test_progress_keeps_multiple_results_in_one_live_render(monkeypatch):
     progress.update(make_test("first.py").test_path, "building")
     progress.update(make_test("second.py").test_path, "flashing")
 
-    assert [CliOutput._test_name(result.test_path) for result in progress._results] == [
+    assert [CliOutput._test_name(report.test_path) for report in progress._reports] == [
         "first.py",
         "second.py",
     ]
@@ -432,8 +432,8 @@ def test_progress_separates_same_test_by_device(monkeypatch):
     )
 
     assert [
-        (CliOutput._test_name(result.test_path), CliOutput._device_name(result.device))
-        for result in progress._results
+        (CliOutput._test_name(report.test_path), CliOutput._device_name(report.device))
+        for report in progress._reports
     ] == [
         ("check.py", "/dev/ttyUSB0"),
         ("check.py", "/dev/ttyUSB1"),

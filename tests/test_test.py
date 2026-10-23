@@ -12,7 +12,7 @@ from ottu.output import (
     TestOutputOpts,
     TestOutputParser,
 )
-from ottu.result import TestStatus
+from ottu.report import TestStatus
 from ottu.test import Test, TestOpts
 from ottu.test_path import TestPath, TestPathContext
 
@@ -94,7 +94,7 @@ def test_test_run_propagates_backend_failure(monkeypatch, tmp_path):
 
 
 def test_test_run_returns_device_reported_failure(monkeypatch, tmp_path):
-    """A failure parsed from device output becomes a failed test result."""
+    """A failure parsed from device output becomes a failed test report."""
     test_path = TestPath(tmp_path / "check.py", tmp_path / "check.py", None, "check.py")
     backend = Backend.from_mapping({"program": "echo program"})
 
@@ -115,16 +115,16 @@ def test_test_run_returns_device_reported_failure(monkeypatch, tmp_path):
 
     monkeypatch.setattr(TestOutputParser, "parse", Output().parse)
 
-    result = Test(
+    report = Test(
         test_path,
         device=Device.from_string("address=/dev/ttyUSB0"),
         backend=backend,
     ).run()
 
-    assert result.status is TestStatus.DONE
-    assert result.outcome is TestOutcome.FAIL
-    assert not result.passed
-    assert result.output == TestOutput(("FAIL",), TestOutcome.FAIL)
+    assert report.status is TestStatus.DONE
+    assert report.outcome is TestOutcome.FAIL
+    assert not report.passed
+    assert report.output == TestOutput(("FAIL",), TestOutcome.FAIL)
 
 
 def test_test_run_notifies_observer_of_final_status(monkeypatch, tmp_path):
@@ -134,8 +134,8 @@ def test_test_run_notifies_observer_of_final_status(monkeypatch, tmp_path):
     events = []
 
     class Observer:
-        def result_changed(self, result):
-            events.append(result)
+        def report_changed(self, report):
+            events.append(report)
 
     monkeypatch.setattr(
         Backend,
@@ -167,8 +167,8 @@ def test_test_run_reads_output_after_backend(monkeypatch, tmp_path):
     monkeypatch.setattr(TestOutputParser, "parse", Output().parse)
 
     class Observer:
-        def result_changed(self, result):
-            statuses.append(result.status)
+        def report_changed(self, report):
+            statuses.append(report.status)
 
     monkeypatch.setattr(
         DeviceAccessSerial,
@@ -182,7 +182,7 @@ def test_test_run_reads_output_after_backend(monkeypatch, tmp_path):
         lambda _backend, _test_path, _device, **kwargs: None,
     )
 
-    result = Test(
+    report = Test(
         test_path,
         device=Device.from_string("address=/dev/ttyUSB0"),
         backend=backend,
@@ -191,8 +191,8 @@ def test_test_run_reads_output_after_backend(monkeypatch, tmp_path):
 
     assert len(events) == 1
     assert events[0] is not None
-    assert result.output == TestOutput(("PASS",), TestOutcome.PASS)
-    assert result.outcome is TestOutcome.PASS
+    assert report.output == TestOutput(("PASS",), TestOutcome.PASS)
+    assert report.outcome is TestOutcome.PASS
     assert statuses == [
         TestStatus.CONNECTING,
         TestStatus.EXECUTING,
@@ -227,13 +227,13 @@ def test_test_run_uses_expected_output_file(monkeypatch, tmp_path):
         lambda _backend, _test_path, _device, **kwargs: None,
     )
 
-    result = Test(
+    report = Test(
         test_path,
         device=Device.from_string("address=/dev/ttyUSB0"),
         backend=backend,
     ).run()
 
-    assert result.output == TestOutput(("ready\n", "PASS\n"), TestOutcome.PASS)
+    assert report.output == TestOutput(("ready\n", "PASS\n"), TestOutcome.PASS)
 
 
 @pytest.mark.parametrize(
@@ -271,15 +271,15 @@ def test_test_run_detects_unity_output_without_expected_file(
         lambda _backend, _test_path, _device, **kwargs: None,
     )
 
-    result = Test(
+    report = Test(
         test_path,
         options=TestOpts(output=TestOutputOpts(idle_timeout=0)),
         device=Device.from_string("address=/dev/ttyUSB0"),
         backend=backend,
     ).run()
 
-    assert result.status is TestStatus.DONE
-    assert result.outcome is outcome
+    assert report.status is TestStatus.DONE
+    assert report.outcome is outcome
 
 
 def test_test_run_without_connection_passes(monkeypatch, tmp_path):
@@ -292,10 +292,10 @@ def test_test_run_without_connection_passes(monkeypatch, tmp_path):
         lambda _backend, _test_path, _device, **kwargs: None,
     )
 
-    result = Test(test_path, backend=backend).run()
+    report = Test(test_path, backend=backend).run()
 
-    assert result.output == TestOutput((), TestOutcome.PASS)
-    assert result.outcome is TestOutcome.PASS
+    assert report.output == TestOutput((), TestOutcome.PASS)
+    assert report.outcome is TestOutcome.PASS
 
 
 def test_test_run_parses_with_the_tests_own_output_options(monkeypatch, tmp_path):
@@ -402,8 +402,8 @@ def test_test_run_fails_before_building_when_no_parser_can_be_created(
     events = []
 
     class Observer:
-        def result_changed(self, result):
-            events.append(result.status)
+        def report_changed(self, report):
+            events.append(report.status)
 
     monkeypatch.setattr(
         Backend,
