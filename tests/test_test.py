@@ -7,10 +7,10 @@ from ottu.backend import Backend
 from ottu.device import Device, DeviceAccessSerial
 from ottu.output import (
     OutputParserType,
-    TestOutcome,
     TestOutput,
     TestOutputOpts,
     TestOutputParser,
+    TestResult,
 )
 from ottu.report import TestStatus
 from ottu.test import Test, TestOpts
@@ -111,7 +111,7 @@ def test_test_run_returns_device_reported_failure(monkeypatch, tmp_path):
 
     class Output:
         def parse(self, connection):
-            return TestOutput(("FAIL",), TestOutcome.FAIL)
+            return TestOutput(("FAIL",), TestResult.FAIL)
 
     monkeypatch.setattr(TestOutputParser, "parse", Output().parse)
 
@@ -122,9 +122,9 @@ def test_test_run_returns_device_reported_failure(monkeypatch, tmp_path):
     ).run()
 
     assert report.status is TestStatus.DONE
-    assert report.outcome is TestOutcome.FAIL
+    assert report.result is TestResult.FAIL
     assert not report.passed
-    assert report.output == TestOutput(("FAIL",), TestOutcome.FAIL)
+    assert report.output == TestOutput(("FAIL",), TestResult.FAIL)
 
 
 def test_test_run_notifies_observer_of_final_status(monkeypatch, tmp_path):
@@ -149,7 +149,7 @@ def test_test_run_notifies_observer_of_final_status(monkeypatch, tmp_path):
         ("check.py", TestStatus.CONNECTING),
         ("check.py", TestStatus.DONE),
     ]
-    assert [event.outcome for event in events] == [None, TestOutcome.PASS]
+    assert [event.result for event in events] == [None, TestResult.PASS]
 
 
 def test_test_run_reads_output_after_backend(monkeypatch, tmp_path):
@@ -162,7 +162,7 @@ def test_test_run_reads_output_after_backend(monkeypatch, tmp_path):
     class Output:
         def parse(self, connection):
             events.append(connection)
-            return TestOutput(("PASS",), TestOutcome.PASS)
+            return TestOutput(("PASS",), TestResult.PASS)
 
     monkeypatch.setattr(TestOutputParser, "parse", Output().parse)
 
@@ -191,8 +191,8 @@ def test_test_run_reads_output_after_backend(monkeypatch, tmp_path):
 
     assert len(events) == 1
     assert events[0] is not None
-    assert report.output == TestOutput(("PASS",), TestOutcome.PASS)
-    assert report.outcome is TestOutcome.PASS
+    assert report.output == TestOutput(("PASS",), TestResult.PASS)
+    assert report.result is TestResult.PASS
     assert statuses == [
         TestStatus.CONNECTING,
         TestStatus.EXECUTING,
@@ -233,20 +233,20 @@ def test_test_run_uses_expected_output_file(monkeypatch, tmp_path):
         backend=backend,
     ).run()
 
-    assert report.output == TestOutput(("ready\n", "PASS\n"), TestOutcome.PASS)
+    assert report.output == TestOutput(("ready\n", "PASS\n"), TestResult.PASS)
 
 
 @pytest.mark.parametrize(
-    ("lines", "outcome"),
+    ("lines", "result"),
     [
-        ([b"6 Tests 0 Failures 0 Ignored\n", b"OK\n"], TestOutcome.PASS),
-        ([b"6 Tests 1 Failures 0 Ignored\n", b"FAIL\n"], TestOutcome.FAIL),
-        ([b"ready\n"], TestOutcome.UNVERIFIED),
-        ([], TestOutcome.UNVERIFIED),
+        ([b"6 Tests 0 Failures 0 Ignored\n", b"OK\n"], TestResult.PASS),
+        ([b"6 Tests 1 Failures 0 Ignored\n", b"FAIL\n"], TestResult.FAIL),
+        ([b"ready\n"], TestResult.UNVERIFIED),
+        ([], TestResult.UNVERIFIED),
     ],
 )
 def test_test_run_detects_unity_output_without_expected_file(
-    monkeypatch, tmp_path, lines, outcome
+    monkeypatch, tmp_path, lines, result
 ):
     """Without an .exp file, output is checked as Unity or left unverified."""
     test_path = TestPath(tmp_path / "check.py", tmp_path / "check.py", None, "check.py")
@@ -279,7 +279,7 @@ def test_test_run_detects_unity_output_without_expected_file(
     ).run()
 
     assert report.status is TestStatus.DONE
-    assert report.outcome is outcome
+    assert report.result is result
 
 
 def test_test_run_without_connection_passes(monkeypatch, tmp_path):
@@ -294,8 +294,8 @@ def test_test_run_without_connection_passes(monkeypatch, tmp_path):
 
     report = Test(test_path, backend=backend).run()
 
-    assert report.output == TestOutput((), TestOutcome.PASS)
-    assert report.outcome is TestOutcome.PASS
+    assert report.output == TestOutput((), TestResult.PASS)
+    assert report.result is TestResult.PASS
 
 
 def test_test_run_parses_with_the_tests_own_output_options(monkeypatch, tmp_path):
@@ -313,7 +313,7 @@ def test_test_run_parses_with_the_tests_own_output_options(monkeypatch, tmp_path
     monkeypatch.setattr(
         TestOutputParser,
         "parse",
-        lambda self, connection: TestOutput(("PASS",), TestOutcome.PASS),
+        lambda self, connection: TestOutput(("PASS",), TestResult.PASS),
     )
     monkeypatch.setattr(
         DeviceAccessSerial,

@@ -121,7 +121,7 @@ def test_run_resolves_working_directory_test(project):
 
 
 def test_run_writes_captured_output_to_results_directory(project, monkeypatch):
-    from ottu.output import TestOutcome, TestOutput, TestOutputParser
+    from ottu.output import TestOutput, TestOutputParser, TestResult
 
     root, _ = project
     test_file = root / "tests" / "check.py"
@@ -135,7 +135,7 @@ def test_run_writes_captured_output_to_results_directory(project, monkeypatch):
         TestOutputParser,
         "parse",
         lambda self, connection: TestOutput(
-            ("unity failure detail\n",), TestOutcome.FAIL
+            ("unity failure detail\n",), TestResult.FAIL
         ),
     )
 

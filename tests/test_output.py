@@ -6,10 +6,10 @@ from ottu.output import (
     FramedOutput,
     FramedOutputOpts,
     OutputParserType,
-    TestOutcome,
     TestOutput,
     TestOutputOpts,
     TestOutputParser,
+    TestResult,
     UnityOutputParser,
 )
 
@@ -35,20 +35,20 @@ class LowercaseOutputParser(TestOutputParser):
         return line.decode().strip().lower()
 
     def all_lines_parser(self, lines: list[str]) -> TestOutput:
-        outcome = TestOutcome.PASS if lines[-1] == "pass" else TestOutcome.UNVERIFIED
-        return TestOutput(tuple(lines), outcome)
+        result = TestResult.PASS if lines[-1] == "pass" else TestResult.UNVERIFIED
+        return TestOutput(tuple(lines), result)
 
 
-class TerminalOutcomeOutputParser(TestOutputParser):
+class TerminalResultOutputParser(TestOutputParser):
     def all_lines_parser(self, lines: list[str]) -> TestOutput:
-        outcome = TestOutcome.UNVERIFIED
+        result = TestResult.UNVERIFIED
         for line in lines:
             normalized_line = line.strip().upper()
-            if normalized_line == TestOutcome.PASS.value:
-                outcome = TestOutcome.PASS
-            elif normalized_line == TestOutcome.FAIL.value:
-                outcome = TestOutcome.FAIL
-        return TestOutput(tuple(lines), outcome)
+            if normalized_line == TestResult.PASS.value:
+                result = TestResult.PASS
+            elif normalized_line == TestResult.FAIL.value:
+                result = TestResult.FAIL
+        return TestOutput(tuple(lines), result)
 
 
 def expected_parser(tmp_path, expected_text=None, expected_bytes=None, **opts):
@@ -67,7 +67,7 @@ def test_test_output_reads_parses_and_prints_serial_output():
     output = LowercaseOutputParser(make_opts()).parse(connection)
 
     assert output.lines == ("ready", "pass")
-    assert output.outcome is TestOutcome.PASS
+    assert output.result is TestResult.PASS
 
 
 def test_parser_joins_a_line_split_by_a_read_timeout():
@@ -89,10 +89,10 @@ def test_parser_keeps_a_trailing_line_without_newline():
 def test_test_output_returns_device_reported_failure():
     connection = FakeSerial([b"FAIL\n"])
 
-    output = TerminalOutcomeOutputParser(make_opts()).parse(connection)
+    output = TerminalResultOutputParser(make_opts()).parse(connection)
 
     assert output.lines == ("FAIL",)
-    assert output.outcome is TestOutcome.FAIL
+    assert output.result is TestResult.FAIL
 
 
 def test_expected_output_parser_passes_matching_output(tmp_path):
@@ -100,7 +100,7 @@ def test_expected_output_parser_passes_matching_output(tmp_path):
 
     output = parser.parse(FakeSerial([b"ready\n", b"PASS\n"]))
 
-    assert output == TestOutput(("ready\n", "PASS\n"), TestOutcome.PASS)
+    assert output == TestOutput(("ready\n", "PASS\n"), TestResult.PASS)
 
 
 def test_expected_output_parser_fails_different_output(tmp_path):
@@ -108,7 +108,7 @@ def test_expected_output_parser_fails_different_output(tmp_path):
 
     output = parser.parse(FakeSerial([b"ready\n", b"FAIL\n"]))
 
-    assert output == TestOutput(("ready\n", "FAIL\n"), TestOutcome.FAIL)
+    assert output == TestOutput(("ready\n", "FAIL\n"), TestResult.FAIL)
 
 
 def test_expected_output_parser_preserves_line_ending_semantics(tmp_path):
@@ -116,7 +116,7 @@ def test_expected_output_parser_preserves_line_ending_semantics(tmp_path):
 
     output = parser.parse(FakeSerial([b"ready\n"]))
 
-    assert output.outcome is TestOutcome.FAIL
+    assert output.result is TestResult.FAIL
 
 
 def test_expected_output_parser_compares_only_framed_output(tmp_path):
@@ -139,7 +139,7 @@ def test_expected_output_parser_compares_only_framed_output(tmp_path):
         )
     )
 
-    assert output == TestOutput(("ready\n", "PASS\n"), TestOutcome.PASS)
+    assert output == TestOutput(("ready\n", "PASS\n"), TestResult.PASS)
 
 
 def test_expected_output_parser_accepts_end_marker_without_begin(tmp_path):
@@ -147,7 +147,7 @@ def test_expected_output_parser_accepts_end_marker_without_begin(tmp_path):
 
     output = parser.parse(FakeSerial([b"ready\n", b"PASS\n", b"=== ottu end ===\n"]))
 
-    assert output == TestOutput(("ready\n", "PASS\n"), TestOutcome.PASS)
+    assert output == TestOutput(("ready\n", "PASS\n"), TestResult.PASS)
 
 
 def test_expected_output_parser_compares_markers_when_framing_is_disabled(tmp_path):
@@ -161,7 +161,7 @@ def test_expected_output_parser_compares_markers_when_framing_is_disabled(tmp_pa
         FakeSerial([b"=== ottu begin ===\n", b"ready\n", b"=== ottu end ===\n"])
     )
 
-    assert output.outcome is TestOutcome.PASS
+    assert output.result is TestResult.PASS
     assert output.lines == (
         "=== ottu begin ===\n",
         "ready\n",
@@ -222,7 +222,7 @@ def test_output_parser_fails_when_begin_marker_has_no_end():
         )
     )
 
-    assert output == TestOutput(("6 Tests 0 Failures 0 Ignored",), TestOutcome.FAIL)
+    assert output == TestOutput(("6 Tests 0 Failures 0 Ignored",), TestResult.FAIL)
 
 
 def fed(lines, *opts):
@@ -318,7 +318,7 @@ def test_unity_output_parser_extracts_framed_output_and_summary():
         "6 Tests 0 Failures 0 Ignored",
         "OK",
     )
-    assert output.outcome is TestOutcome.PASS
+    assert output.result is TestResult.PASS
 
 
 def test_unity_output_parser_fails_on_unity_failures():
@@ -326,19 +326,19 @@ def test_unity_output_parser_fails_on_unity_failures():
         FakeSerial([b"6 Tests 1 Failures 0 Ignored\n"])
     )
 
-    assert output.outcome is TestOutcome.FAIL
+    assert output.result is TestResult.FAIL
 
 
 def test_unity_output_parser_is_unverified_without_summary_when_auto_detected():
     output = UnityOutputParser(make_opts()).parse(FakeSerial([b"hello\n", b"world\n"]))
 
-    assert output == TestOutput(("hello", "world"), TestOutcome.UNVERIFIED)
+    assert output == TestOutput(("hello", "world"), TestResult.UNVERIFIED)
 
 
 def test_unity_output_parser_is_unverified_without_any_output():
     output = UnityOutputParser(make_opts()).parse(FakeSerial([]))
 
-    assert output == TestOutput((), TestOutcome.UNVERIFIED)
+    assert output == TestOutput((), TestResult.UNVERIFIED)
 
 
 def test_unity_output_parser_fails_without_summary_when_explicitly_requested():
@@ -346,7 +346,7 @@ def test_unity_output_parser_fails_without_summary_when_explicitly_requested():
         FakeSerial([b"hello\n"])
     )
 
-    assert output == TestOutput(("hello",), TestOutcome.FAIL)
+    assert output == TestOutput(("hello",), TestResult.FAIL)
 
 
 def test_unity_output_parser_rejects_different_frame_tokens():
@@ -391,7 +391,7 @@ def test_create_selects_expected_output_parser_for_exp_file(tmp_path):
     output = parser.parse(FakeSerial([b"ready\n"]))
 
     assert type(parser) is ExpectedOutputParser
-    assert output.outcome is TestOutcome.PASS
+    assert output.result is TestResult.PASS
 
 
 def test_create_selects_unity_parser_without_exp_file(tmp_path):
@@ -405,7 +405,7 @@ def test_create_detects_unity_output_without_exp_file(tmp_path):
 
     output = parser.parse(FakeSerial([b"6 Tests 0 Failures 0 Ignored\n", b"OK\n"]))
 
-    assert output.outcome is TestOutcome.PASS
+    assert output.result is TestResult.PASS
 
 
 def test_create_leaves_other_output_unverified_without_exp_file(tmp_path):
@@ -413,7 +413,7 @@ def test_create_leaves_other_output_unverified_without_exp_file(tmp_path):
 
     output = parser.parse(FakeSerial([b"ready\n"]))
 
-    assert output.outcome is TestOutcome.UNVERIFIED
+    assert output.result is TestResult.UNVERIFIED
 
 
 def test_create_selects_unity_parser(tmp_path):
@@ -465,8 +465,8 @@ def test_create_gives_each_default_parser_its_own_token(tmp_path):
     assert first.opts.framed_output_opts.token != second.opts.framed_output_opts.token
 
 
-def test_test_output_has_no_outcome_by_default():
-    assert TestOutput(("ready",)).outcome is None
+def test_test_output_has_no_result_by_default():
+    assert TestOutput(("ready",)).result is None
 
 
 def test_test_output_default_parser_decodes_invalid_bytes():
@@ -475,7 +475,7 @@ def test_test_output_default_parser_decodes_invalid_bytes():
     output = TestOutputParser(make_opts()).parse(connection)
 
     assert output.lines == ("ready\ufffd",)
-    assert output.outcome is TestOutcome.UNVERIFIED
+    assert output.result is TestResult.UNVERIFIED
 
 
 def test_test_output_waits_through_empty_reads():
