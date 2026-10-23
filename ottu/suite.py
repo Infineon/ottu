@@ -542,7 +542,6 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
         parsed_count = cls._parse_count(count) if count else 1
         tests = Test.from_inputs(
             test_inputs,
-            options=TestOpts(),
             context=context,
             exclude_test_selectors=exclude_test_selectors,
             backend=backend,
