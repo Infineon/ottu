@@ -1,4 +1,4 @@
-"""Structured results produced by Ottu test execution."""
+"""Structured reports produced by Ottu test execution."""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ class TestStatus(str, Enum):
 
 
 @dataclass(frozen=True)
-class TestResult:
-    """Lifecycle result of one resolved test path.
+class TestReport:
+    """Lifecycle report of one resolved test path.
 
     The verdict comes from the output, so it is ``None`` until the test has
     produced an interpreted output.
@@ -47,8 +47,8 @@ class TestResult:
         return self.outcome is TestOutcome.PASS
 
 
-class TestResultObserver(Protocol):
-    """Observer notified when a test result changes status."""
+class TestReportObserver(Protocol):
+    """Observer notified when a test report changes status."""
 
-    def result_changed(self, result: TestResult) -> None:
-        """Handle one lifecycle result."""
+    def report_changed(self, report: TestReport) -> None:
+        """Handle one lifecycle report."""

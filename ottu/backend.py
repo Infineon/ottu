@@ -14,7 +14,7 @@ import yaml
 from ottu.backend_builtins import BACKEND_BUILTINS
 from ottu.config_models.project.config import ProjectConfig
 from ottu.device import Device
-from ottu.result import TestResult, TestResultObserver, TestStatus
+from ottu.report import TestReport, TestReportObserver, TestStatus
 from ottu.test_path import TestPath
 
 
@@ -114,7 +114,7 @@ class Backend:
         *,
         working_dir: str | Path | None = None,
         run_command: Callable[..., Any] = subprocess.run,
-        observers: Sequence[TestResultObserver] = (),
+        observers: Sequence[TestReportObserver] = (),
         defines: Sequence[str] = (),
     ) -> None:
         """Run backend commands for a resolved device.
@@ -175,7 +175,7 @@ class Backend:
 
     @staticmethod
     def _notify(
-        observers: Sequence[TestResultObserver],
+        observers: Sequence[TestReportObserver],
         test_path: TestPath,
         status: TestStatus,
         device: Device,
@@ -183,6 +183,6 @@ class Backend:
         """Notify observers about a backend execution stage."""
         if not observers:
             return
-        result = TestResult(test_path, status, device=device)
+        report = TestReport(test_path, status, device=device)
         for observer in observers:
-            observer.result_changed(result)
+            observer.report_changed(report)

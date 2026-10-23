@@ -11,7 +11,7 @@ from typing import cast
 
 from ottu.backend import Backend
 from ottu.device import Device, DeviceQuery
-from ottu.result import TestResult, TestResultObserver
+from ottu.report import TestReport, TestReportObserver
 from ottu.test import Test, TestOpts
 from ottu.test_path import TestPathContext, TestPathResolver
 
@@ -60,7 +60,7 @@ class SuiteInputStrategy:
         dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
-        observers: Sequence[TestResultObserver] = (),
+        observers: Sequence[TestReportObserver] = (),
     ) -> Suite:
         """Parse, validate, and construct a suite from raw input values."""
         raise NotImplementedError
@@ -197,7 +197,7 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
         dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
-        observers: Sequence[TestResultObserver] = (),
+        observers: Sequence[TestReportObserver] = (),
     ) -> Suite:
         """Create a role-based suite with per-role test options."""
         parsed_inputs = cls._parse_inputs(
@@ -536,7 +536,7 @@ class StandardSuiteInputStrategy(SuiteInputStrategy):
         dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
-        observers: Sequence[TestResultObserver] = (),
+        observers: Sequence[TestReportObserver] = (),
     ) -> Suite:
         """Create a sequential, repeated, or distributed suite from selectors."""
         parsed_count = cls._parse_count(count) if count else 1
@@ -599,7 +599,7 @@ class Suite:
         dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
-        observers: Sequence[TestResultObserver] = (),
+        observers: Sequence[TestReportObserver] = (),
     ) -> Suite:
         """Select an input strategy and construct an executable suite."""
         context = context or TestPathContext()
@@ -618,14 +618,14 @@ class Suite:
                 )
         raise ValueError("No suite input strategy supports the supplied inputs.")
 
-    def run(self) -> list[TestResult]:
+    def run(self) -> list[TestReport]:
         """Run the suite using whichever runner its strategy selected."""
-        runner = cast(Callable[[], list[TestResult]], getattr(self, self.runner))
+        runner = cast(Callable[[], list[TestReport]], getattr(self, self.runner))
         return runner()
 
     def runner_sequential(
-        self, observer: SuiteParallelTestResultObserver | None = None
-    ) -> list[TestResult]:
+        self, observer: SuiteParallelTestReportObserver | None = None
+    ) -> list[TestReport]:
         """Run each test directly, one at a time, in order.
 
         The first resolved device is assigned to every test in this process.
@@ -640,42 +640,42 @@ class Suite:
         ]
 
     def runner_repeated(
-        self, observer: SuiteParallelTestResultObserver | None = None
-    ) -> list[TestResult]:
+        self, observer: SuiteParallelTestReportObserver | None = None
+    ) -> list[TestReport]:
         """Expand and run each base test's ``count`` replicas in parallel."""
-        results: list[TestResult] = []
+        reports: list[TestReport] = []
         for test in self.tests:
             repeated_tests = SuiteInputStrategy._assign_devices(
                 (test,),
                 self.resolved_devices,
                 self.options.count,
             )
-            results.extend(
+            reports.extend(
                 Suite(
                     self.options,
                     repeated_tests,
                     runner="runner_parallel",
                 ).runner_parallel(observer)
             )
-        return results
+        return reports
 
     def runner_parallel(
-        self, observer: SuiteParallelTestResultObserver | None = None
-    ) -> list[TestResult]:
+        self, observer: SuiteParallelTestReportObserver | None = None
+    ) -> list[TestReport]:
         """Run every test in this suite concurrently, as one group."""
-        result_observers = tuple(
+        report_observers = tuple(
             dict.fromkeys(o for test in self.tests for o in test.observers)
         )
         event_queue = None if observer is None else observer.event_queue
-        notifier = SuiteParallelTestResultNotifier(
-            result_observers, event_queue=event_queue
+        notifier = SuiteParallelTestReportNotifier(
+            report_observers, event_queue=event_queue
         )
         processes = [
             Process(
                 target=self._run_test,
                 args=(
                     test,
-                    SuiteParallelTestResultObserver(notifier.event_queue, job_id),
+                    SuiteParallelTestReportObserver(notifier.event_queue, job_id),
                 ),
             )
             for test, job_id in self._replica_targets(self.tests)
@@ -687,7 +687,7 @@ class Suite:
             failure_message="One or more test workers failed.",
         )
 
-    def runner_distributed(self) -> list[TestResult]:
+    def runner_distributed(self) -> list[TestReport]:
         """Split this suite across jobs, each running in its own process."""
         distributed_suites = self.split(self.options.jobs)
         if len(distributed_suites) == 1:
@@ -696,8 +696,8 @@ class Suite:
         observers = tuple(
             observer for test in self.tests for observer in test.observers
         )
-        notifier = SuiteParallelTestResultNotifier(observers)
-        observer = SuiteParallelTestResultObserver(notifier.event_queue)
+        notifier = SuiteParallelTestReportNotifier(observers)
+        observer = SuiteParallelTestReportObserver(notifier.event_queue)
         processes = [
             Process(target=getattr(suite_job, suite_job.runner), args=(observer,))
             for suite_job in distributed_suites
@@ -706,9 +706,9 @@ class Suite:
 
     @staticmethod
     def _run_test(
-        test: Test, observer: SuiteParallelTestResultObserver | None = None
-    ) -> TestResult:
-        """Run one test, publishing its result through the observer if given."""
+        test: Test, observer: SuiteParallelTestReportObserver | None = None
+    ) -> TestReport:
+        """Run one test, publishing its report through the observer if given."""
         if observer is not None:
             test = replace(test, observers=(observer,))
         return test.run()
@@ -773,66 +773,66 @@ class Suite:
     @staticmethod
     def run_parallel_processes(
         processes: list[Process],
-        notifier: SuiteParallelTestResultNotifier,
+        notifier: SuiteParallelTestReportNotifier,
         *,
         live_drain: bool = True,
         failure_message: str = "One or more jobs failed.",
-    ) -> list[TestResult]:
-        results: list[TestResult] = []
+    ) -> list[TestReport]:
+        reports: list[TestReport] = []
         for process in processes:
             notifier.register_process(process)
         for process in processes:
             process.start()
         if live_drain:
             while notifier.processes_running:
-                results.extend(notifier.notify())
+                reports.extend(notifier.notify())
         for process in processes:
             process.join()
         # Nested workers must not notify: the queue is shared with an
         # ancestor that owns it and is already draining it.
         if live_drain:
-            results.extend(notifier.notify())
+            reports.extend(notifier.notify())
         if any(process.exitcode != 0 for process in processes):
             raise RuntimeError(failure_message)
-        return results
+        return reports
 
 
-class SuiteParallelTestResultObserver:
-    """Publish a child-process test result to a parent queue."""
+class SuiteParallelTestReportObserver:
+    """Publish a child-process test report to a parent queue."""
 
     def __init__(
-        self, event_queue: Queue[TestResult], job_id: str | None = None
+        self, event_queue: Queue[TestReport], job_id: str | None = None
     ) -> None:
         self._event_queue = event_queue
         self._job_id = job_id
 
-    def result_changed(self, result: TestResult) -> None:
-        """Queue one result from a parallel test execution."""
-        self._event_queue.put(replace(result, job_id=self._job_id))
+    def report_changed(self, report: TestReport) -> None:
+        """Queue one report from a parallel test execution."""
+        self._event_queue.put(replace(report, job_id=self._job_id))
 
     @property
-    def event_queue(self) -> Queue[TestResult]:
+    def event_queue(self) -> Queue[TestReport]:
         """Return the queue this observer publishes to."""
         return self._event_queue
 
 
-class SuiteParallelTestResultNotifier:
-    """Coordinate parallel processes results by using an event queue.
-    The notifier registers child processes, drains their test results from
+class SuiteParallelTestReportNotifier:
+    """Coordinate parallel processes reports by using an event queue.
+    The notifier registers child processes, drains their test reports from
     the shared queue, and forwards them to the final observers."""
 
     def __init__(
         self,
-        observers: Sequence[TestResultObserver] = (),
+        observers: Sequence[TestReportObserver] = (),
         *,
-        event_queue: Queue[TestResult] | None = None,
+        event_queue: Queue[TestReport] | None = None,
     ) -> None:
         self._event_queue = event_queue if event_queue is not None else Queue()
         self._observers = tuple(observers)
         self._processes: list[Process] = []
 
     @property
-    def event_queue(self) -> Queue[TestResult]:
+    def event_queue(self) -> Queue[TestReport]:
         """Return the queue shared with child processes."""
         return self._event_queue
 
@@ -850,14 +850,14 @@ class SuiteParallelTestResultNotifier:
         """Register a process whose events this observer will forward."""
         self._processes.append(process)
 
-    def notify(self) -> list[TestResult]:
-        """Drain queued results, notify the final observers, and return them."""
-        results: list[TestResult] = []
+    def notify(self) -> list[TestReport]:
+        """Drain queued reports, notify the final observers, and return them."""
+        reports: list[TestReport] = []
         while True:
             try:
-                result = self._event_queue.get_nowait()
+                report = self._event_queue.get_nowait()
             except Empty:
-                return results
-            results.append(result)
+                return reports
+            reports.append(report)
             for observer in self._observers:
-                observer.result_changed(result)
+                observer.report_changed(report)
