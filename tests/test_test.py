@@ -12,7 +12,7 @@ from ottu.output import (
     TestOutputParser,
     TestResult,
 )
-from ottu.report import TestStatus
+from ottu.report import TestReportNotifier, TestStatus
 from ottu.test import Test, TestOpts
 from ottu.test_path import TestPath, TestPathContext
 
@@ -60,9 +60,9 @@ def test_test_run_invokes_assigned_backend(monkeypatch, tmp_path):
     called_test_path, device, kwargs = calls[0]
     assert called_test_path == test_path
     assert device == test.device
-    assert kwargs["observers"] == ()
+    assert isinstance(kwargs["notifier"], TestReportNotifier)
     assert kwargs["defines"][0] == "OTTU_FRAMED_OUTPUT_ENABLED=1"
-    assert set(kwargs) == {"observers", "defines"}
+    assert set(kwargs) == {"notifier", "defines"}
     assert test.device.name == "board-1"
 
 

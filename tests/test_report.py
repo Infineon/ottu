@@ -5,9 +5,10 @@ from dataclasses import replace
 
 from ottu.output import TestOutput, TestResult
 from ottu.report import (
-    QueueTestReportNotifier,
     QueueTestReportObserver,
+    QueueTestReportRelay,
     TestReport,
+    TestReportNotifier,
     TestStatus,
 )
 from ottu.test_path import TestPath
@@ -53,6 +54,31 @@ def test_report_has_no_result_while_its_output_is_not_judged():
     assert not report.passed
 
 
+class RecordingObserver:
+    def __init__(self):
+        self.reports = []
+
+    def report_changed(self, report):
+        self.reports.append(report)
+
+
+def test_notifier_hands_each_report_to_every_observer_in_order():
+    first, second = RecordingObserver(), RecordingObserver()
+    building = make_report(TestStatus.BUILDING)
+    flashing = make_report(TestStatus.FLASHING)
+
+    notifier = TestReportNotifier((first, second))
+    notifier.notify(building)
+    notifier.notify(flashing)
+
+    assert first.reports == [building, flashing]
+    assert second.reports == [building, flashing]
+
+
+def test_notifier_without_observers_does_nothing():
+    TestReportNotifier().notify(make_report(TestStatus.DONE))
+
+
 def test_queue_observer_publishes_report_with_job_id():
     """The child queue observer tags reports with their job id."""
     queued = []
@@ -68,8 +94,8 @@ def test_queue_observer_publishes_report_with_job_id():
     assert queued == [replace(report, job_id="1")]
 
 
-def test_queue_notifier_tracks_registered_processes():
-    """The notifier reports whether registered processes are running."""
+def test_queue_relay_tracks_registered_processes():
+    """The relay reports whether registered processes are running."""
 
     class FakeProcess:
         def __init__(self, running):
@@ -78,16 +104,16 @@ def test_queue_notifier_tracks_registered_processes():
         def is_alive(self):
             return self.running
 
-    notifier = QueueTestReportNotifier()
-    notifier.register_process(FakeProcess(False))
-    assert not notifier.processes_running
+    relay = QueueTestReportRelay()
+    relay.register_process(FakeProcess(False))
+    assert not relay.processes_running
 
-    notifier.register_process(FakeProcess(True))
-    assert notifier.processes_running
+    relay.register_process(FakeProcess(True))
+    assert relay.processes_running
 
 
-def test_queue_notifier_forwards_queued_reports_to_observers():
-    """The notifier forwards labeled reports to final observers."""
+def test_queue_relay_forwards_queued_reports_to_observers():
+    """The relay forwards labeled reports to final observers."""
 
     class FakeQueue:
         def __init__(self, report):
@@ -100,19 +126,12 @@ def test_queue_notifier_forwards_queued_reports_to_observers():
             self.report = None
             return report
 
-    class RecordingObserver:
-        def __init__(self):
-            self.reports = []
-
-        def report_changed(self, report):
-            self.reports.append(report)
-
     report = replace(make_report(TestStatus.BUILDING), job_id="1")
     recording_observer = RecordingObserver()
-    notifier = QueueTestReportNotifier(
+    relay = QueueTestReportRelay(
         (recording_observer,),
         event_queue=FakeQueue(report),
     )
 
-    assert notifier.notify() == [report]
+    assert relay.forward() == [report]
     assert recording_observer.reports == [report]

@@ -1253,7 +1253,7 @@ def test_run_parallel_processes_drains_live_reports():
         def join(self):
             pass
 
-    class FakeNotifier:
+    class FakeRelay:
         def __init__(self):
             self.running = True
             self.notifications = 0
@@ -1265,12 +1265,12 @@ def test_run_parallel_processes_drains_live_reports():
         def register_process(self, process):
             pass
 
-        def notify(self):
+        def forward(self):
             self.notifications += 1
             self.running = False
             return []
 
-    notifier = FakeNotifier()
+    relay = FakeRelay()
 
-    assert Suite.run_parallel_processes([FakeProcess()], notifier) == []
-    assert notifier.notifications == 2
+    assert Suite.run_parallel_processes([FakeProcess()], relay) == []
+    assert relay.notifications == 2
