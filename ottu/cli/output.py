@@ -9,7 +9,9 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
+from ottu.config_models.project.config import ProjectConfig
 from ottu.device import Device
+from ottu.output import TestOutcome, TestOutput
 from ottu.result import TestResult, TestStatus
 from ottu.test_path import TestPath
 
@@ -22,8 +24,10 @@ class CliOutput:
         "building": "blue",
         "flashing": "dark_orange",
         "executing": "purple",
+        "done": "green",
         "PASS": "green",
         "FAIL": "red",
+        "UNVERIFIED": "yellow",
     }
 
     def __init__(self, *, console: Console | None = None) -> None:
@@ -55,8 +59,17 @@ class CliOutput:
         status: str,
         device: Device | None = None,
         job_id: str | None = None,
+        outcome: str | None = None,
     ) -> None:
-        result = TestResult(test_path, TestStatus(status), device=device, job_id=job_id)
+        result = TestResult(
+            test_path,
+            TestStatus(status),
+            device=device,
+            job_id=job_id,
+            output=(
+                TestOutput((), TestOutcome(outcome)) if outcome is not None else None
+            ),
+        )
         self._update_result(result)
 
     def _update_result(self, result: TestResult) -> None:
@@ -64,7 +77,7 @@ class CliOutput:
         name = self._test_name(result.test_path)
         device = self._device_name(result.device)
         job_id = result.job_id
-        status = result.status.value
+        status = self._display_status(result)
         result_key = (name, device, job_id)
         result_index = next(
             (
@@ -84,7 +97,7 @@ class CliOutput:
         else:
             self._results[result_index] = result
 
-        if result.status in {TestStatus.PASSED, TestStatus.FAILED}:
+        if result.status is TestStatus.DONE:
             self._spinners.pop(result_key, None)
         else:
             spinner = self._spinners.get(result_key)
@@ -137,7 +150,7 @@ class CliOutput:
                 result.job_id,
             )
             spinner = self._spinners.get(result_key)
-            status = self._status_text(result.status.value)
+            status = self._status_text(self._display_status(result))
             if spinner:
                 spinner_table = Table.grid(padding=(0, 1))
                 spinner_table.add_column(no_wrap=True)
@@ -168,7 +181,7 @@ class CliOutput:
                 (len(cls._device_name(result.device)) for result in results),
                 default=0,
             ),
-            max((len(result.status.value) for result in results), default=0),
+            max((len(cls._display_status(result)) for result in results), default=0),
         )
 
     @classmethod
@@ -181,8 +194,16 @@ class CliOutput:
             f"{display_name:<{name_width}}{column_gap}"
             f"{cls._device_name(result.device):<{device_width}}{column_gap}"
         )
-        text.append(result.status.value, style=cls._STATUS_COLORS[result.status.value])
+        status = cls._display_status(result)
+        text.append(status, style=cls._STATUS_COLORS[status])
         return text
+
+    @staticmethod
+    def _display_status(result: TestResult) -> str:
+        """Return the outcome of a finished test, else its lifecycle status."""
+        if result.status is TestStatus.DONE and result.outcome is not None:
+            return str(result.outcome.value)
+        return str(result.status.value)
 
     @staticmethod
     def _test_name(test_path: TestPath) -> str:
@@ -217,3 +238,58 @@ class CliOutput:
         text = Text()
         text.append(status, style=cls._STATUS_COLORS[status])
         return text
+
+
+class TestOutputWriter:
+    """Write completed test output to per-test files."""
+
+    def __init__(self, working_dir: Path, project_root: Path | None = None) -> None:
+        """
+        Place results in the first configured test directory,
+        else the working dir.
+        """
+        roots = [working_dir.resolve()]
+        if project_root is not None and project_root.resolve() not in roots:
+            roots.append(project_root.resolve())
+        configured = ProjectConfig.from_project_root(project_root).test_dirs
+        self._test_dirs = [
+            root / test_dir
+            for root in roots
+            for test_dir in configured
+            if (root / test_dir).is_dir()
+        ]
+        base = self._test_dirs[0] if self._test_dirs else roots[0]
+        self._result_dir = base / "results"
+
+    def result_changed(self, result: TestResult) -> None:
+        """Persist the captured output when a test finishes."""
+        if result.status is not TestStatus.DONE or result.output is None:
+            return
+
+        absolute_path = result.test_path.absolute_path
+        test_dir = next(
+            (
+                test_dir
+                for test_dir in self._test_dirs
+                if absolute_path.is_relative_to(test_dir)
+            ),
+            None,
+        )
+        if test_dir is not None:
+            relative_path = absolute_path.relative_to(test_dir)
+        else:
+            relative_path = Path(result.test_path.working_dir_relative_path)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            relative_path = result.test_path.project_root_relative_path or Path(
+                result.test_path.file_name
+            )
+        output_path = self._result_dir / relative_path.with_name(
+            f"{relative_path.name}.out"
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        # Unity lines arrive without their line ending; expected-output lines keep it.
+        lines = (
+            line if line.endswith(("\n", "\r")) else f"{line}\n"
+            for line in result.output.lines
+        )
+        output_path.write_text("".join(lines), encoding="utf-8", newline="")
