@@ -11,7 +11,7 @@ from rich.text import Text
 
 from ottu.config_models.project.config import ProjectConfig
 from ottu.device import Device
-from ottu.output import TestOutcome, TestOutput
+from ottu.output import TestOutput, TestResult
 from ottu.report import TestReport, TestStatus
 from ottu.test_path import TestPath
 
@@ -59,16 +59,14 @@ class CliOutput:
         status: str,
         device: Device | None = None,
         job_id: str | None = None,
-        outcome: str | None = None,
+        result: str | None = None,
     ) -> None:
         report = TestReport(
             test_path,
             TestStatus(status),
             device=device,
             job_id=job_id,
-            output=(
-                TestOutput((), TestOutcome(outcome)) if outcome is not None else None
-            ),
+            output=TestOutput((), TestResult(result)) if result is not None else None,
         )
         self._update_report(report)
 
@@ -200,9 +198,9 @@ class CliOutput:
 
     @staticmethod
     def _display_status(report: TestReport) -> str:
-        """Return the outcome of a finished test, else its lifecycle status."""
-        if report.status is TestStatus.DONE and report.outcome is not None:
-            return str(report.outcome.value)
+        """Return the result of a finished test, else its lifecycle status."""
+        if report.status is TestStatus.DONE and report.result is not None:
+            return str(report.result.value)
         return str(report.status.value)
 
     @staticmethod
