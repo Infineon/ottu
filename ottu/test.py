@@ -9,7 +9,7 @@ from ottu.output import (
     TestOutputOpts,
     TestOutputParser,
 )
-from ottu.result import TestResult, TestResultObserver, TestStatus
+from ottu.report import TestReport, TestReportObserver, TestStatus
 from ottu.test_path import TestPath, TestPathContext, TestPathResolver
 
 
@@ -36,7 +36,7 @@ class Test:
     options: TestOpts = field(default_factory=TestOpts)
     device: Device | None = None
     backend: Backend | None = None
-    observers: tuple[TestResultObserver, ...] = ()
+    observers: tuple[TestReportObserver, ...] = ()
 
     @classmethod
     def from_inputs(
@@ -47,7 +47,7 @@ class Test:
         exclude_test_selectors: Sequence[str] = (),
         options: TestOpts | None = None,
         backend: Backend | None = None,
-        observers: Sequence[TestResultObserver] = (),
+        observers: Sequence[TestReportObserver] = (),
     ) -> list["Test"]:
         """Resolve test selectors and create tests.
 
@@ -69,8 +69,8 @@ class Test:
             for test_path in test_paths
         ]
 
-    def run(self) -> TestResult:
-        """Run one resolved test and return its result."""
+    def run(self) -> TestReport:
+        """Run one resolved test and return its report."""
         if self.backend is None:
             raise ValueError("Test backend is required.")
 
@@ -106,14 +106,14 @@ class Test:
         status: TestStatus,
         *,
         output: TestOutput | None = None,
-    ) -> TestResult:
+    ) -> TestReport:
         """Notify observers about a test status change."""
-        result = TestResult(
+        report = TestReport(
             self.test_path,
             status,
             device=self.device,
             output=output,
         )
         for observer in self.observers:
-            observer.result_changed(result)
-        return result
+            observer.report_changed(report)
+        return report
