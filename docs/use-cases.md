@@ -489,10 +489,45 @@ The file will be overwritten if it already exists. If the file does not exist, i
 ottu run --device port=/dev/ttyUSB0 --output-parser unity test_name
 ```
 
-Currently, the supported parsers are:
+The `--output-parser` option is planned but not implemented yet. Until then the
+parser is detected automatically:
+- If a sibling `.exp` file exists, the output is compared with it (`exp-match`).
+- Otherwise the output is checked as Unity output, and the test passes or fails
+  according to the Unity summary line.
+- Any other output is reported as `UNVERIFIED`: the test ran, but its output
+  could not be judged.
+
+Planned `--output-parser` values:
 - `unity`: for Unity test framework
 - `unittest`: for Python's built-in unittest framework
 - `exp-match`: direct file comparison with expected output file. Regex matching might be considered.
+
+Parsing accepts optional `=== ottu begin ===` and `=== ottu end ===` frame
+markers. Output outside the frame is ignored, and the test is complete when the
+end marker arrives. A frame that begins but never ends fails. Each marker may
+carry a token before its closing `===`, as the `ottu-target` library prints it
+(`=== ottu begin <token> ===` and `=== ottu end <token> ===`). A token that
+differs from the one compiled into the test executable fails with an error
+explaining that the executable does not match the compiled tests.
+
+Expected-output comparisons strip framing from both the captured and expected
+output before comparing, so `.exp` files may include the frame markers or just
+the test output.
+
+Each test gets its own token, which ottu compiles into the test executable as
+build defines (for example `OTTU_FRAMED_OUTPUT_ENABLED=1` and
+`OTTU_TEST_FRAME_TOKEN=<token>`) and expects back in the frame markers. The
+token is passed to the compiler as a bare word, which the library turns into
+text, so it may only contain letters, digits, `_`, `.` and `-`; ottu generates
+a UUID. A backend
+receives them through the `{defines}` placeholder of its `build` command:
+alone as an argument it expands to one argument per define, and inside a larger
+argument the defines are joined with spaces. The backend setting
+`define_prefix` (default `-D`) is written in front of each define, so a
+toolchain that takes defines another way can set it, even to an empty string.
+A build command without `{defines}` ignores the defines. The built-in
+`arduino-cli` backend passes them as
+`--build-property "compiler.cpp.extra_flags={defines}"`.
 
 ### 3.11.1 Expected File Lookup for `exp-match`
 
