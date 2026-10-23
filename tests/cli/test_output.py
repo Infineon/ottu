@@ -3,8 +3,9 @@
 from io import StringIO
 from pathlib import Path
 
-from ottu.cli.output import CliOutput
+from ottu.cli.output import CliOutput, TestOutputWriter
 from ottu.device import Device
+from ottu.output import TestOutcome, TestOutput
 from ottu.result import TestResult, TestStatus
 from ottu.test import Test
 from ottu.test_path import TestPath
@@ -19,13 +20,18 @@ def make_test(name, device=None):
     return Test(TestPath(path, path, None, path.name), device=device)
 
 
-def make_result(name, status, device=None):
+def make_result(name, outcome, device=None):
     test = make_test(name, device)
-    return TestResult(test.test_path, status, device=test.device)
+    return TestResult(
+        test.test_path,
+        TestStatus.DONE,
+        device=test.device,
+        output=TestOutput((), outcome),
+    )
 
 
 def test_test_result_prints_pass(capsys):
-    CliOutput.report(make_result("check.py", TestStatus.PASSED))
+    CliOutput.report(make_result("check.py", TestOutcome.PASS))
 
     output = capsys.readouterr().out
     assert "check.py" in output
@@ -33,18 +39,34 @@ def test_test_result_prints_pass(capsys):
 
 
 def test_test_result_prints_fail(capsys):
-    CliOutput.report(make_result("check.py", TestStatus.FAILED))
+    CliOutput.report(make_result("check.py", TestOutcome.FAIL))
 
     output = capsys.readouterr().out
     assert "check.py" in output
     assert "FAIL" in output
 
 
+def test_test_result_prints_unverified(capsys):
+    CliOutput.report(make_result("check.py", TestOutcome.UNVERIFIED))
+
+    output = capsys.readouterr().out
+    assert "check.py" in output
+    assert "UNVERIFIED" in output
+
+
+def test_unverified_result_is_yellow():
+    result = make_result("check.py", TestOutcome.UNVERIFIED)
+
+    text = CliOutput._result_text(result, CliOutput._column_widths([result]))
+
+    assert text.spans[-1].style == "yellow"
+
+
 def test_report_all_prints_each_result(capsys):
     CliOutput.report_all(
         [
-            make_result("first.py", TestStatus.PASSED),
-            make_result("second.py", TestStatus.FAILED),
+            make_result("first.py", TestOutcome.PASS),
+            make_result("second.py", TestOutcome.FAIL),
         ]
     )
 
@@ -53,14 +75,151 @@ def test_report_all_prints_each_result(capsys):
     assert "second.py" in output
 
 
+def test_output_writer_saves_test_output_under_relative_path(tmp_path):
+    test_path = TestPath(
+        tmp_path / "tests" / "nested" / "check.py",
+        Path("tests/nested/check.py"),
+        Path("tests/nested/check.py"),
+        "check.py",
+    )
+    result = TestResult(
+        test_path,
+        TestStatus.DONE,
+        output=TestOutput(
+            ("6 Tests 1 Failures 0 Ignored\n", "FAIL\n"), TestOutcome.FAIL
+        ),
+    )
+
+    (tmp_path / "tests").mkdir()
+
+    TestOutputWriter(tmp_path).result_changed(result)
+
+    assert (tmp_path / "tests" / "results" / "nested" / "check.py.out").read_text(
+        encoding="utf-8"
+    ) == "6 Tests 1 Failures 0 Ignored\nFAIL\n"
+
+
+def test_output_writer_uses_test_dirs_from_project_config(tmp_path):
+    (tmp_path / ".ottu").write_text(
+        "version: 1\ntest_dirs: [fixtures]\nbackend: debug\n", encoding="utf-8"
+    )
+    (tmp_path / "fixtures").mkdir()
+    result = TestResult(
+        TestPath(
+            tmp_path / "fixtures" / "wifi" / "ap.ino",
+            Path("fixtures/wifi/ap.ino"),
+            Path("fixtures/wifi/ap.ino"),
+            "ap.ino",
+        ),
+        TestStatus.DONE,
+        output=TestOutput(("OK\n",), TestOutcome.PASS),
+    )
+
+    TestOutputWriter(tmp_path, tmp_path).result_changed(result)
+
+    assert (tmp_path / "fixtures" / "results" / "wifi" / "ap.ino.out").read_text(
+        encoding="utf-8"
+    ) == "OK\n"
+
+
+def test_output_writer_uses_project_relative_path_outside_working_dir(tmp_path):
+    result = TestResult(
+        TestPath(
+            tmp_path / "project" / "tests" / "check.py",
+            Path("../project/tests/check.py"),
+            Path("tests/check.py"),
+            "check.py",
+        ),
+        TestStatus.DONE,
+        output=TestOutput(("FAIL\n",), TestOutcome.FAIL),
+    )
+
+    TestOutputWriter(tmp_path).result_changed(result)
+
+    assert (tmp_path / "results" / "tests" / "check.py.out").read_text(
+        encoding="utf-8"
+    ) == "FAIL\n"
+
+
+def test_output_writer_keeps_one_line_per_stripped_output_line(tmp_path):
+    test_path = TestPath(tmp_path / "check.py", Path("check.py"), None, "check.py")
+    result = TestResult(
+        test_path,
+        TestStatus.DONE,
+        output=TestOutput(("TEST(a) PASS", "kept\r\n", "OK"), TestOutcome.PASS),
+    )
+
+    TestOutputWriter(tmp_path).result_changed(result)
+
+    assert (tmp_path / "results" / "check.py.out").read_bytes() == (
+        b"TEST(a) PASS\nkept\r\nOK\n"
+    )
+
+
+def test_result_changed_renders_the_result(capsys):
+    CliOutput().result_changed(make_result("check.py", TestOutcome.PASS))
+
+    assert "PASS" in capsys.readouterr().out
+
+
+def test_test_name_drops_the_tests_directory_prefix():
+    test_path = TestPath(
+        Path("/project/tests/wifi/ap.ino"),
+        Path("tests/wifi/ap.ino"),
+        None,
+        "ap.ino",
+    )
+
+    assert CliOutput._test_name(test_path) == "wifi/ap.ino"
+
+
+def test_output_writer_uses_test_dir_of_a_separate_project_root(tmp_path):
+    project = tmp_path / "project"
+    working_dir = project / "sub"
+    working_dir.mkdir(parents=True)
+    (project / "tests").mkdir()
+    result = TestResult(
+        TestPath(
+            project / "tests" / "check.py",
+            Path("../tests/check.py"),
+            Path("tests/check.py"),
+            "check.py",
+        ),
+        TestStatus.DONE,
+        output=TestOutput(("OK\n",), TestOutcome.PASS),
+    )
+
+    TestOutputWriter(working_dir, project).result_changed(result)
+
+    assert (project / "tests" / "results" / "check.py.out").read_text(
+        encoding="utf-8"
+    ) == "OK\n"
+
+
+def test_output_writer_ignores_incomplete_results(tmp_path):
+    test_path = TestPath(tmp_path / "check.py", Path("check.py"), None, "check.py")
+    writer = TestOutputWriter(tmp_path)
+
+    writer.result_changed(
+        TestResult(
+            test_path,
+            TestStatus.EXECUTING,
+            output=TestOutput(("partial\n",), TestOutcome.UNVERIFIED),
+        )
+    )
+    writer.result_changed(TestResult(test_path, TestStatus.DONE))
+
+    assert not (tmp_path / "results").exists()
+
+
 def test_report_all_sizes_columns_to_longest_result():
     output = StringIO()
     CliOutput.report_all(
         [
-            make_result("short.py", TestStatus.PASSED, device="one"),
+            make_result("short.py", TestOutcome.PASS, device="one"),
             make_result(
                 "hello-universe.ino",
-                TestStatus.FAILED,
+                TestOutcome.FAIL,
                 device="infineon:psoc6:cy8ckit_062s2_ai",
             ),
         ],
@@ -71,16 +230,16 @@ def test_report_all_sizes_columns_to_longest_result():
     assert "hello-universe.ino" in output.getvalue()
     widths = CliOutput._column_widths(
         [
-            make_result("short.py", TestStatus.PASSED, device="one"),
+            make_result("short.py", TestOutcome.PASS, device="one"),
             make_result(
                 "hello-universe.ino",
-                TestStatus.FAILED,
+                TestOutcome.FAIL,
                 device="infineon:psoc6:cy8ckit_062s2_ai",
             ),
         ]
     )
     text = CliOutput._result_text(
-        make_result("short.py", TestStatus.PASSED, device="one"), widths
+        make_result("short.py", TestOutcome.PASS, device="one"), widths
     ).plain
     assert text.endswith("\t\t\t\t\t\tPASS")
 
@@ -105,8 +264,9 @@ def test_progress_sizes_columns_to_longest_result(monkeypatch):
     progress.update(make_test("short.py", "one").test_path, "building")
     progress.update(
         make_test("hello-universe.ino").test_path,
-        "FAIL",
+        "done",
         device=Device.from_string("infineon:psoc6:cy8ckit_062s2_ai"),
+        outcome="FAIL",
     )
 
     table = progress._live.renderable
@@ -118,7 +278,7 @@ def test_progress_sizes_columns_to_longest_result(monkeypatch):
 def test_progress_prints_final_status_without_live_spinner(capsys):
     progress = CliOutput()
 
-    progress.update(make_test("check.py").test_path, "PASS")
+    progress.update(make_test("check.py").test_path, "done", outcome="PASS")
     progress.finish()
 
     assert "check.py" in capsys.readouterr().out
@@ -157,12 +317,13 @@ def test_progress_keeps_spinner_across_execution_stages(monkeypatch):
     progress.update(make_test("hello-world").test_path, "building")
     spinner = progress._spinners[("hello-world", "", None)]
     progress.update(make_test("hello-world").test_path, "flashing")
-    progress.update(make_test("hello-world").test_path, "PASS")
+    progress.update(make_test("hello-world").test_path, "done", outcome="PASS")
     progress.finish()
 
     assert spinner is not None
     assert spinner.name == "dots6"
-    assert progress._results[0].status.value == "PASS"
+    assert progress._results[0].status is TestStatus.DONE
+    assert progress._results[0].outcome is TestOutcome.PASS
     assert len(events[2][1].rows) == 1
     assert [event[0] for event in events] == [
         "create",
@@ -204,7 +365,7 @@ def test_progress_stop_clears_active_spinner(monkeypatch):
     progress.update(make_test("check.py").test_path, "building")
     live = progress._live
 
-    progress.update(make_test("check.py").test_path, "PASS")
+    progress.update(make_test("check.py").test_path, "done", outcome="PASS")
     progress.finish()
 
     assert live is not None
