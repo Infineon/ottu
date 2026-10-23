@@ -44,12 +44,23 @@ class SuiteOpts:
             raise ValueError("Suite count must be a positive integer.")
 
 
-class SuiteInputStrategy:
+class SuiteBuilder:
     """Construct a suite from one family of raw CLI input values."""
+
+    @staticmethod
+    def for_inputs(test_inputs: Sequence[str]) -> type[SuiteBuilder]:
+        """Return the first builder that handles the supplied test inputs.
+
+        Builders are tried in order, so the fallback builder must come last.
+        """
+        for builder in (RoleSuiteBuilder, StandardSuiteBuilder):
+            if builder.matches(test_inputs):
+                return builder
+        raise ValueError("No suite builder supports the supplied inputs.")
 
     @classmethod
     def matches(cls, test_inputs: Sequence[str]) -> bool:
-        """Return whether this strategy handles the supplied test inputs."""
+        """Return whether this builder handles the supplied test inputs."""
         raise NotImplementedError
 
     @classmethod
@@ -133,14 +144,14 @@ class SuiteInputStrategy:
         :meth:`Device.from_string`.
         """
         if available_devices is None:
-            return SuiteInputStrategy._resolve_devices_from_definitions(device_inputs)
+            return SuiteBuilder._resolve_devices_from_definitions(device_inputs)
 
         available_resolved_devices = (
             Device.from_file(available_devices)
             if isinstance(available_devices, Path)
             else available_devices
         )
-        return SuiteInputStrategy._resolve_devices_from_queries(
+        return SuiteBuilder._resolve_devices_from_queries(
             device_inputs, available_resolved_devices
         )
 
@@ -181,7 +192,7 @@ class RoleSuiteInputs:
     devices: dict[str, tuple[str, ...]]
 
 
-class RoleSuiteInputStrategy(SuiteInputStrategy):
+class RoleSuiteBuilder(SuiteBuilder):
     """Construct suites from role-qualified test inputs."""
 
     @classmethod
@@ -301,7 +312,7 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
                 f"Role '{role}' needs {required_count} devices, "
                 f"but only {len(normalized_queries)} were provided."
             )
-        return SuiteInputStrategy._resolve_devices(
+        return SuiteBuilder._resolve_devices(
             normalized_queries,
             available_devices,
         )
@@ -520,12 +531,12 @@ class RoleSuiteInputStrategy(SuiteInputStrategy):
         return parsed_values
 
 
-class StandardSuiteInputStrategy(SuiteInputStrategy):
+class StandardSuiteBuilder(SuiteBuilder):
     """Construct suites from ordinary test selector inputs."""
 
     @classmethod
     def matches(cls, test_inputs: Sequence[str]) -> bool:
-        """Provide the fallback strategy for ordinary selector inputs."""
+        """Provide the fallback builder for ordinary selector inputs."""
         return True
 
     @classmethod
@@ -605,25 +616,22 @@ class Suite:
         backend: Backend | None = None,
         observers: Sequence[TestReportObserver] = (),
     ) -> Suite:
-        """Select an input strategy and construct an executable suite."""
+        """Select a suite builder and construct an executable suite."""
         context = context or TestPathContext()
-        for strategy in (RoleSuiteInputStrategy, StandardSuiteInputStrategy):
-            if strategy.matches(test_inputs):
-                return strategy.from_inputs(
-                    test_inputs,
-                    context=context,
-                    exclude_test_selectors=exclude,
-                    count=count,
-                    devices=devices,
-                    dev_list=dev_list,
-                    jobs=jobs,
-                    backend=backend,
-                    observers=observers,
-                )
-        raise ValueError("No suite input strategy supports the supplied inputs.")
+        return SuiteBuilder.for_inputs(test_inputs).from_inputs(
+            test_inputs,
+            context=context,
+            exclude_test_selectors=exclude,
+            count=count,
+            devices=devices,
+            dev_list=dev_list,
+            jobs=jobs,
+            backend=backend,
+            observers=observers,
+        )
 
     def run(self) -> list[TestReport]:
-        """Run the suite using whichever runner its strategy selected."""
+        """Run the suite using whichever runner its builder selected."""
         runner = cast(Callable[[], list[TestReport]], getattr(self, self.runner))
         return runner()
 
@@ -649,7 +657,7 @@ class Suite:
         """Expand and run each base test's ``count`` replicas in parallel."""
         reports: list[TestReport] = []
         for test in self.tests:
-            repeated_tests = SuiteInputStrategy._assign_devices(
+            repeated_tests = SuiteBuilder._assign_devices(
                 (test,),
                 self.resolved_devices,
                 self.options.count,
@@ -728,9 +736,7 @@ class Suite:
 
     def split(self, jobs: int) -> list[Suite]:
         """Split tests and reserve a disjoint device group for each job."""
-        runner = StandardSuiteInputStrategy._select_runner(
-            replace(self.options, jobs=1)
-        )
+        runner = StandardSuiteBuilder._select_runner(replace(self.options, jobs=1))
         if jobs == 1 or len(self.tests) <= 1:
             return [
                 Suite(
