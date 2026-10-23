@@ -9,7 +9,12 @@ from ottu.output import (
     TestOutputParser,
     TestResult,
 )
-from ottu.report import TestReport, TestReportObserver, TestStatus
+from ottu.report import (
+    TestReport,
+    TestReportNotifier,
+    TestReportObserver,
+    TestStatus,
+)
 from ottu.test_path import TestPath, TestPathContext, TestPathResolver
 
 
@@ -37,6 +42,10 @@ class Test:
     device: Device | None = None
     backend: Backend | None = None
     observers: tuple[TestReportObserver, ...] = ()
+    notifier: TestReportNotifier = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self.notifier = TestReportNotifier(self.observers)
 
     @classmethod
     def from_inputs(
@@ -88,7 +97,7 @@ class Test:
             self.backend.run(
                 self.test_path,
                 device,
-                observers=self.observers,
+                notifier=self.notifier,
                 defines=parser.opts.target_build_args(),
             )
             if connection is not None:
@@ -107,13 +116,7 @@ class Test:
         *,
         output: TestOutput | None = None,
     ) -> TestReport:
-        """Notify observers about a test status change."""
-        report = TestReport(
-            self.test_path,
-            status,
-            device=self.device,
-            output=output,
-        )
-        for observer in self.observers:
-            observer.report_changed(report)
+        """Report a status change of this test to its observers."""
+        report = TestReport(self.test_path, status, device=self.device, output=output)
+        self.notifier.notify(report)
         return report

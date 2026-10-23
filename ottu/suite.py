@@ -11,8 +11,8 @@ from typing import cast
 from ottu.backend import Backend
 from ottu.device import Device, DeviceQuery
 from ottu.report import (
-    QueueTestReportNotifier,
     QueueTestReportObserver,
+    QueueTestReportRelay,
     TestReport,
     TestReportObserver,
 )
@@ -671,20 +671,20 @@ class Suite:
             dict.fromkeys(o for test in self.tests for o in test.observers)
         )
         event_queue = None if observer is None else observer.event_queue
-        notifier = QueueTestReportNotifier(report_observers, event_queue=event_queue)
+        relay = QueueTestReportRelay(report_observers, event_queue=event_queue)
         processes = [
             Process(
                 target=self._run_test,
                 args=(
                     test,
-                    QueueTestReportObserver(notifier.event_queue, job_id),
+                    QueueTestReportObserver(relay.event_queue, job_id),
                 ),
             )
             for test, job_id in self._replica_targets(self.tests)
         ]
         return self.run_parallel_processes(
             processes,
-            notifier,
+            relay,
             live_drain=observer is None,
             failure_message="One or more test workers failed.",
         )
@@ -698,13 +698,13 @@ class Suite:
         observers = tuple(
             observer for test in self.tests for observer in test.observers
         )
-        notifier = QueueTestReportNotifier(observers)
-        observer = QueueTestReportObserver(notifier.event_queue)
+        relay = QueueTestReportRelay(observers)
+        observer = QueueTestReportObserver(relay.event_queue)
         processes = [
             Process(target=getattr(suite_job, suite_job.runner), args=(observer,))
             for suite_job in distributed_suites
         ]
-        return self.run_parallel_processes(processes, notifier)
+        return self.run_parallel_processes(processes, relay)
 
     @staticmethod
     def _run_test(
@@ -775,25 +775,25 @@ class Suite:
     @staticmethod
     def run_parallel_processes(
         processes: list[Process],
-        notifier: QueueTestReportNotifier,
+        relay: QueueTestReportRelay,
         *,
         live_drain: bool = True,
         failure_message: str = "One or more jobs failed.",
     ) -> list[TestReport]:
         reports: list[TestReport] = []
         for process in processes:
-            notifier.register_process(process)
+            relay.register_process(process)
         for process in processes:
             process.start()
         if live_drain:
-            while notifier.processes_running:
-                reports.extend(notifier.notify())
+            while relay.processes_running:
+                reports.extend(relay.forward())
         for process in processes:
             process.join()
-        # Nested workers must not notify: the queue is shared with an
+        # Nested workers must not forward: the queue is shared with an
         # ancestor that owns it and is already draining it.
         if live_drain:
-            reports.extend(notifier.notify())
+            reports.extend(relay.forward())
         if any(process.exitcode != 0 for process in processes):
             raise RuntimeError(failure_message)
         return reports
