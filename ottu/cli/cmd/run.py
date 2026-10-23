@@ -6,7 +6,7 @@ import click
 
 from ottu.backend import Backend
 from ottu.cli.context import CliContext
-from ottu.cli.output import CliOutput
+from ottu.cli.output import CliOutput, TestOutputWriter
 from ottu.suite import Suite
 from ottu.test_path import TestPathContext
 
@@ -67,7 +67,10 @@ def run(
         backend=Backend.load(
             project_root=cli_ctx.project_root,
         ),
-        observers=(cli_output,),
+        observers=(
+            cli_output,
+            TestOutputWriter(cli_ctx.working_dir, cli_ctx.project_root),
+        ),
     )
     try:
         suite.run()
