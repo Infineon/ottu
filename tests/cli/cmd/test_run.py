@@ -120,6 +120,36 @@ def test_run_resolves_working_directory_test(project):
     assert "check.py" in result.output
 
 
+def test_run_writes_captured_output_to_results_directory(project, monkeypatch):
+    from ottu.output import TestOutcome, TestOutput, TestOutputParser
+
+    root, _ = project
+    test_file = root / "tests" / "check.py"
+    test_file.parent.mkdir()
+    test_file.touch()
+    monkeypatch.setattr(
+        "ottu.device.Device.connect",
+        lambda self: type("Connection", (), {"close": lambda self: None})(),
+    )
+    monkeypatch.setattr(
+        TestOutputParser,
+        "parse",
+        lambda self, connection: TestOutput(
+            ("unity failure detail\n",), TestOutcome.FAIL
+        ),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["--working-dir", str(root), "run", "--device", "board-1", "check.py"],
+    )
+
+    assert result.exit_code == 0
+    assert (root / "tests" / "results" / "check.py.out").read_text(
+        encoding="utf-8"
+    ) == "unity failure detail\n"
+
+
 def test_run_resolves_default_tests_directory_test(project):
     root, _ = project
     test_file = root / "tests" / "check.py"
