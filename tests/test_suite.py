@@ -7,10 +7,10 @@ from ottu.backend import Backend
 from ottu.device import Device, DeviceAccessSerial, DeviceQuery
 from ottu.report import QueueTestReportObserver, TestReport
 from ottu.suite import (
-    RoleSuiteInputStrategy,
-    StandardSuiteInputStrategy,
+    RoleSuiteBuilder,
+    StandardSuiteBuilder,
     Suite,
-    SuiteInputStrategy,
+    SuiteBuilder,
     SuiteOpts,
 )
 from ottu.test import Test, TestOpts, TestPath, TestPathContext, TestPathResolver
@@ -21,17 +21,17 @@ def make_report(name, status, job_id=None):
     return TestReport(path, status, job_id=job_id)
 
 
-def test_standard_input_strategy_matches_plain_inputs():
-    """The standard strategy accepts unqualified test selectors."""
-    assert StandardSuiteInputStrategy.matches(["test_a.py", "test_b.py"])
+def test_standard_suite_builder_matches_plain_inputs():
+    """The standard builder accepts unqualified test selectors."""
+    assert StandardSuiteBuilder.matches(["test_a.py", "test_b.py"])
 
 
-def test_suite_input_strategy_base_contract_is_not_implemented():
-    """The abstract strategy contract raises before a concrete implementation."""
+def test_suite_builder_base_contract_is_not_implemented():
+    """The abstract builder contract raises before a concrete implementation."""
     with pytest.raises(NotImplementedError):
-        SuiteInputStrategy.matches(["test_a.py"])
+        SuiteBuilder.matches(["test_a.py"])
     with pytest.raises(NotImplementedError):
-        SuiteInputStrategy.from_inputs(
+        SuiteBuilder.from_inputs(
             ["test_a.py"],
             context=TestPathContext(),
             exclude_test_selectors=(),
@@ -39,15 +39,15 @@ def test_suite_input_strategy_base_contract_is_not_implemented():
         )
 
 
-def test_role_input_strategy_matches_role_inputs():
-    """The role strategy claims all role input attempts."""
-    assert RoleSuiteInputStrategy.matches(["server=server.py"])
+def test_role_suite_builder_matches_role_inputs():
+    """The role builder claims all role input attempts."""
+    assert RoleSuiteBuilder.matches(["server=server.py"])
 
 
-def test_role_input_strategy_rejects_exclusions():
+def test_role_suite_builder_rejects_exclusions():
     """Role inputs reject exclusion selectors to keep parsing deterministic."""
     with pytest.raises(ValueError, match="Exclusions are not supported"):
-        RoleSuiteInputStrategy.from_inputs(
+        RoleSuiteBuilder.from_inputs(
             ["server=server.py"],
             context=TestPathContext(),
             exclude_test_selectors=("skip.py",),
@@ -58,7 +58,7 @@ def test_role_input_strategy_rejects_exclusions():
 def test_classify_test_inputs_rejects_duplicate_roles():
     """Each role can have only one test input."""
     with pytest.raises(ValueError, match="provided more than once"):
-        RoleSuiteInputStrategy.from_inputs(
+        RoleSuiteBuilder.from_inputs(
             ["server=one.py", "server=two.py"],
             context=TestPathContext(),
             exclude_test_selectors=(),
@@ -69,7 +69,7 @@ def test_classify_test_inputs_rejects_duplicate_roles():
 def test_classify_test_inputs_rejects_mixed_roles_and_plain_inputs():
     """Role-qualified and unqualified inputs cannot be mixed."""
     with pytest.raises(ValueError, match="cannot be mixed"):
-        RoleSuiteInputStrategy.from_inputs(
+        RoleSuiteBuilder.from_inputs(
             ["server=server.py", "client.py"],
             context=TestPathContext(),
             exclude_test_selectors=(),
@@ -80,7 +80,7 @@ def test_classify_test_inputs_rejects_mixed_roles_and_plain_inputs():
 def test_suite_opts_rejects_extra_equals_in_role_input():
     """Role-qualified inputs must contain exactly one equals separator."""
     with pytest.raises(ValueError):
-        RoleSuiteInputStrategy.from_inputs(
+        RoleSuiteBuilder.from_inputs(
             ["server=server=server.py"],
             context=TestPathContext(),
             exclude_test_selectors=(),
@@ -91,7 +91,7 @@ def test_suite_opts_rejects_extra_equals_in_role_input():
 def test_suite_opts_rejects_malformed_role_input():
     """Role-qualified inputs require both a role and a test path."""
     with pytest.raises(ValueError, match="key=value"):
-        RoleSuiteInputStrategy.from_inputs(
+        RoleSuiteBuilder.from_inputs(
             ["server="],
             context=TestPathContext(),
             exclude_test_selectors=(),
@@ -103,7 +103,7 @@ def test_assign_devices_pairs_replicas_with_distinct_devices():
     """Each replica is paired one-to-one with a distinct device when able."""
     test = Test(TestPath("check.py", "check.py", None, "check.py"))
 
-    tests = StandardSuiteInputStrategy._assign_devices(
+    tests = StandardSuiteBuilder._assign_devices(
         [test], (Device(name="board-1"), Device(name="board-2")), 2
     )
 
@@ -115,7 +115,7 @@ def test_assign_devices_rejects_insufficient_devices_for_replicas():
     test = Test(TestPath("check.py", "check.py", None, "check.py"))
 
     with pytest.raises(ValueError, match="needs 2 devices"):
-        StandardSuiteInputStrategy._assign_devices([test], (Device(name="board-1"),), 2)
+        StandardSuiteBuilder._assign_devices([test], (Device(name="board-1"),), 2)
 
 
 def test_assign_devices_rejects_missing_device_for_replica():
@@ -123,7 +123,7 @@ def test_assign_devices_rejects_missing_device_for_replica():
     test = Test(TestPath("check.py", "check.py", None, "check.py"))
 
     with pytest.raises(ValueError, match="needs 1 devices"):
-        StandardSuiteInputStrategy._assign_devices([test], ())
+        StandardSuiteBuilder._assign_devices([test], ())
 
 
 def test_assign_devices_rejects_missing_devices_for_replicas():
@@ -131,12 +131,12 @@ def test_assign_devices_rejects_missing_devices_for_replicas():
     test = Test(TestPath("check.py", "check.py", None, "check.py"))
 
     with pytest.raises(ValueError, match="needs 2 devices"):
-        StandardSuiteInputStrategy._assign_devices([test], (), required_count=2)
+        StandardSuiteBuilder._assign_devices([test], (), required_count=2)
 
 
 def test_resolve_devices_returns_all_direct_devices():
     """Direct resolution returns every supplied device."""
-    assert StandardSuiteInputStrategy._resolve_devices(("board-1",), None) == (
+    assert StandardSuiteBuilder._resolve_devices(("board-1",), None) == (
         Device.from_string("board-1"),
     )
 
@@ -149,7 +149,7 @@ def test_resolve_devices_returns_all_matching_list_devices_when_required_is_lowe
     monkeypatch.setattr(Device, "from_file", lambda _: available)
     monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
 
-    assert StandardSuiteInputStrategy._resolve_devices(
+    assert StandardSuiteBuilder._resolve_devices(
         ("board",), tmp_path / "devices.yml"
     ) == tuple(available)
 
@@ -160,9 +160,9 @@ def test_resolve_devices_uses_all_list_devices_without_a_query(tmp_path, monkeyp
     monkeypatch.setattr(Device, "from_file", lambda _: available)
     monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
 
-    assert StandardSuiteInputStrategy._resolve_devices(
-        (), tmp_path / "devices.yml"
-    ) == tuple(available)
+    assert StandardSuiteBuilder._resolve_devices((), tmp_path / "devices.yml") == tuple(
+        available
+    )
 
 
 def test_resolve_devices_returns_all_list_matches(tmp_path, monkeypatch):
@@ -171,7 +171,7 @@ def test_resolve_devices_returns_all_list_matches(tmp_path, monkeypatch):
     monkeypatch.setattr(Device, "from_file", lambda _: available)
     monkeypatch.setattr(DeviceQuery, "find", lambda devices, query: list(devices))
 
-    assert StandardSuiteInputStrategy._resolve_devices(
+    assert StandardSuiteBuilder._resolve_devices(
         ("board",), tmp_path / "devices.yml"
     ) == tuple(available)
 
@@ -182,9 +182,7 @@ def test_resolve_devices_returns_empty_result_for_zero_required_devices(
     """A zero-device request returns without requiring a list match."""
     monkeypatch.setattr(Device, "from_file", lambda _: [])
 
-    assert (
-        StandardSuiteInputStrategy._resolve_devices((), tmp_path / "devices.yml") == ()
-    )
+    assert StandardSuiteBuilder._resolve_devices((), tmp_path / "devices.yml") == ()
 
 
 def test_suite_from_inputs_resolves_tests_and_sets_mode(tmp_path):
@@ -503,13 +501,13 @@ def test_role_suite_from_inputs_validates_role_qualified_devices(
 def test_parse_role_devices_rejects_query_matching_multiple_roles(monkeypatch):
     """Role-device parsing rejects an ambiguous role match."""
     monkeypatch.setattr(
-        RoleSuiteInputStrategy,
+        RoleSuiteBuilder,
         "_device_roles",
         classmethod(lambda cls, device, roles: ("server", "client")),
     )
 
     with pytest.raises(ValueError, match="more than one role"):
-        RoleSuiteInputStrategy._parse_role_devices(
+        RoleSuiteBuilder._parse_role_devices(
             ("role=server,address=/dev/ttyUSB0",),
             ("server", "client"),
         )
@@ -517,7 +515,7 @@ def test_parse_role_devices_rejects_query_matching_multiple_roles(monkeypatch):
 
 def test_parse_role_devices_returns_empty_mapping_without_devices():
     """Role-device parsing leaves roles unresolved when no devices are supplied."""
-    assert RoleSuiteInputStrategy._parse_role_devices((), ("server",)) == {}
+    assert RoleSuiteBuilder._parse_role_devices((), ("server",)) == {}
 
 
 def test_suite_from_inputs_sets_jobs(tmp_path):
@@ -567,20 +565,29 @@ def test_role_suite_from_inputs_rejects_jobs(tmp_path):
         )
 
 
-def test_suite_from_inputs_raises_when_no_strategy_matches(monkeypatch):
-    """The dispatcher fails loudly if every strategy rejects the raw inputs."""
+def test_suite_builder_for_inputs_selects_the_matching_builder():
+    """Role inputs select the role builder; anything else the standard one."""
+    assert SuiteBuilder.for_inputs(["server=server.py"]) is RoleSuiteBuilder
+    assert SuiteBuilder.for_inputs(["test_a.py"]) is StandardSuiteBuilder
+
+
+def test_suite_from_inputs_raises_when_no_builder_matches(monkeypatch):
+    """The dispatcher fails loudly if every builder rejects the raw inputs."""
     monkeypatch.setattr(
-        RoleSuiteInputStrategy,
+        RoleSuiteBuilder,
         "matches",
         classmethod(lambda cls, _: False),
     )
     monkeypatch.setattr(
-        StandardSuiteInputStrategy,
+        StandardSuiteBuilder,
         "matches",
         classmethod(lambda cls, _: False),
     )
 
-    with pytest.raises(ValueError, match="No suite input strategy supports"):
+    with pytest.raises(ValueError, match="No suite builder supports"):
+        SuiteBuilder.for_inputs([])
+
+    with pytest.raises(ValueError, match="No suite builder supports"):
         Suite.from_inputs([])
 
 
@@ -704,7 +711,7 @@ def test_role_validation_rejects_non_file_resolved_path(monkeypatch, tmp_path):
     )
 
     with pytest.raises(ValueError, match="exactly one test file"):
-        RoleSuiteInputStrategy._validate_role_test_files(
+        RoleSuiteBuilder._validate_role_test_files(
             {"server": "server_tests"}, TestPathContext(working_dir=tmp_path)
         )
 
