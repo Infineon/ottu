@@ -3,15 +3,19 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from glob import has_magic
-from multiprocessing import Process, Queue
+from multiprocessing import Process
 from pathlib import Path
-from queue import Empty
 from re import fullmatch
 from typing import cast
 
 from ottu.backend import Backend
 from ottu.device import Device, DeviceQuery
-from ottu.report import TestReport, TestReportObserver
+from ottu.report import (
+    QueueTestReportNotifier,
+    QueueTestReportObserver,
+    TestReport,
+    TestReportObserver,
+)
 from ottu.test import Test, TestOpts
 from ottu.test_path import TestPathContext, TestPathResolver
 
@@ -624,7 +628,7 @@ class Suite:
         return runner()
 
     def runner_sequential(
-        self, observer: SuiteParallelTestReportObserver | None = None
+        self, observer: QueueTestReportObserver | None = None
     ) -> list[TestReport]:
         """Run each test directly, one at a time, in order.
 
@@ -640,7 +644,7 @@ class Suite:
         ]
 
     def runner_repeated(
-        self, observer: SuiteParallelTestReportObserver | None = None
+        self, observer: QueueTestReportObserver | None = None
     ) -> list[TestReport]:
         """Expand and run each base test's ``count`` replicas in parallel."""
         reports: list[TestReport] = []
@@ -660,22 +664,20 @@ class Suite:
         return reports
 
     def runner_parallel(
-        self, observer: SuiteParallelTestReportObserver | None = None
+        self, observer: QueueTestReportObserver | None = None
     ) -> list[TestReport]:
         """Run every test in this suite concurrently, as one group."""
         report_observers = tuple(
             dict.fromkeys(o for test in self.tests for o in test.observers)
         )
         event_queue = None if observer is None else observer.event_queue
-        notifier = SuiteParallelTestReportNotifier(
-            report_observers, event_queue=event_queue
-        )
+        notifier = QueueTestReportNotifier(report_observers, event_queue=event_queue)
         processes = [
             Process(
                 target=self._run_test,
                 args=(
                     test,
-                    SuiteParallelTestReportObserver(notifier.event_queue, job_id),
+                    QueueTestReportObserver(notifier.event_queue, job_id),
                 ),
             )
             for test, job_id in self._replica_targets(self.tests)
@@ -696,8 +698,8 @@ class Suite:
         observers = tuple(
             observer for test in self.tests for observer in test.observers
         )
-        notifier = SuiteParallelTestReportNotifier(observers)
-        observer = SuiteParallelTestReportObserver(notifier.event_queue)
+        notifier = QueueTestReportNotifier(observers)
+        observer = QueueTestReportObserver(notifier.event_queue)
         processes = [
             Process(target=getattr(suite_job, suite_job.runner), args=(observer,))
             for suite_job in distributed_suites
@@ -706,7 +708,7 @@ class Suite:
 
     @staticmethod
     def _run_test(
-        test: Test, observer: SuiteParallelTestReportObserver | None = None
+        test: Test, observer: QueueTestReportObserver | None = None
     ) -> TestReport:
         """Run one test, publishing its report through the observer if given."""
         if observer is not None:
@@ -773,7 +775,7 @@ class Suite:
     @staticmethod
     def run_parallel_processes(
         processes: list[Process],
-        notifier: SuiteParallelTestReportNotifier,
+        notifier: QueueTestReportNotifier,
         *,
         live_drain: bool = True,
         failure_message: str = "One or more jobs failed.",
@@ -795,69 +797,3 @@ class Suite:
         if any(process.exitcode != 0 for process in processes):
             raise RuntimeError(failure_message)
         return reports
-
-
-class SuiteParallelTestReportObserver:
-    """Publish a child-process test report to a parent queue."""
-
-    def __init__(
-        self, event_queue: Queue[TestReport], job_id: str | None = None
-    ) -> None:
-        self._event_queue = event_queue
-        self._job_id = job_id
-
-    def report_changed(self, report: TestReport) -> None:
-        """Queue one report from a parallel test execution."""
-        self._event_queue.put(replace(report, job_id=self._job_id))
-
-    @property
-    def event_queue(self) -> Queue[TestReport]:
-        """Return the queue this observer publishes to."""
-        return self._event_queue
-
-
-class SuiteParallelTestReportNotifier:
-    """Coordinate parallel processes reports by using an event queue.
-    The notifier registers child processes, drains their test reports from
-    the shared queue, and forwards them to the final observers."""
-
-    def __init__(
-        self,
-        observers: Sequence[TestReportObserver] = (),
-        *,
-        event_queue: Queue[TestReport] | None = None,
-    ) -> None:
-        self._event_queue = event_queue if event_queue is not None else Queue()
-        self._observers = tuple(observers)
-        self._processes: list[Process] = []
-
-    @property
-    def event_queue(self) -> Queue[TestReport]:
-        """Return the queue shared with child processes."""
-        return self._event_queue
-
-    @property
-    def processes_running(self) -> bool:
-        """Return whether any registered process is still running."""
-        return any(self._is_alive(process) for process in self._processes)
-
-    @staticmethod
-    def _is_alive(process: Process) -> bool:
-        is_alive = getattr(process, "is_alive", None)
-        return bool(is_alive and is_alive())
-
-    def register_process(self, process: Process) -> None:
-        """Register a process whose events this observer will forward."""
-        self._processes.append(process)
-
-    def notify(self) -> list[TestReport]:
-        """Drain queued reports, notify the final observers, and return them."""
-        reports: list[TestReport] = []
-        while True:
-            try:
-                report = self._event_queue.get_nowait()
-            except Empty:
-                return reports
-            reports.append(report)
-            for observer in self._observers:
-                observer.report_changed(report)
