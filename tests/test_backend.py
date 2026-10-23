@@ -7,7 +7,7 @@ import pytest
 from ottu.backend import Backend, BackendCommandError
 from ottu.backend_builtins import BACKEND_BUILTINS
 from ottu.device import Device
-from ottu.result import TestStatus
+from ottu.report import TestStatus
 from ottu.test import Test
 from ottu.test_path import TestPath
 
@@ -40,8 +40,8 @@ class RecordingObserver:
     def __init__(self):
         self.events = []
 
-    def result_changed(self, result):
-        self.events.append(result)
+    def report_changed(self, report):
+        self.events.append(report)
 
 
 def test_backend_runs_rendered_commands():
