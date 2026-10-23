@@ -7,7 +7,7 @@ import pytest
 from ottu.backend import Backend, BackendCommandError
 from ottu.backend_builtins import BACKEND_BUILTINS
 from ottu.device import Device
-from ottu.report import TestStatus
+from ottu.report import TestReportNotifier, TestStatus
 from ottu.test import Test
 from ottu.test_path import TestPath
 
@@ -101,7 +101,7 @@ def test_backend_notifies_observers_for_each_stage():
     backend.run(
         make_test("hello-world.py").test_path,
         Device(),
-        observers=(observer,),
+        notifier=TestReportNotifier((observer,)),
         run_command=lambda command, **kwargs: None,
     )
 
