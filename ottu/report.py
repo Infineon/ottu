@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from enum import Enum
+from multiprocessing import Process, Queue
+from queue import Empty
 from typing import Protocol
 
 from ottu.device import Device
@@ -52,3 +55,69 @@ class TestReportObserver(Protocol):
 
     def report_changed(self, report: TestReport) -> None:
         """Handle one lifecycle report."""
+
+
+class QueueTestReportObserver:
+    """Publish a child-process test report to a parent queue."""
+
+    def __init__(
+        self, event_queue: Queue[TestReport], job_id: str | None = None
+    ) -> None:
+        self._event_queue = event_queue
+        self._job_id = job_id
+
+    def report_changed(self, report: TestReport) -> None:
+        """Queue one report from a parallel test execution."""
+        self._event_queue.put(replace(report, job_id=self._job_id))
+
+    @property
+    def event_queue(self) -> Queue[TestReport]:
+        """Return the queue this observer publishes to."""
+        return self._event_queue
+
+
+class QueueTestReportNotifier:
+    """Coordinate parallel processes reports by using an event queue.
+    The notifier registers child processes, drains their test reports from
+    the shared queue, and forwards them to the final observers."""
+
+    def __init__(
+        self,
+        observers: Sequence[TestReportObserver] = (),
+        *,
+        event_queue: Queue[TestReport] | None = None,
+    ) -> None:
+        self._event_queue = event_queue if event_queue is not None else Queue()
+        self._observers = tuple(observers)
+        self._processes: list[Process] = []
+
+    @property
+    def event_queue(self) -> Queue[TestReport]:
+        """Return the queue shared with child processes."""
+        return self._event_queue
+
+    @property
+    def processes_running(self) -> bool:
+        """Return whether any registered process is still running."""
+        return any(self._is_alive(process) for process in self._processes)
+
+    @staticmethod
+    def _is_alive(process: Process) -> bool:
+        is_alive = getattr(process, "is_alive", None)
+        return bool(is_alive and is_alive())
+
+    def register_process(self, process: Process) -> None:
+        """Register a process whose events this observer will forward."""
+        self._processes.append(process)
+
+    def notify(self) -> list[TestReport]:
+        """Drain queued reports, notify the final observers, and return them."""
+        reports: list[TestReport] = []
+        while True:
+            try:
+                report = self._event_queue.get_nowait()
+            except Empty:
+                return reports
+            reports.append(report)
+            for observer in self._observers:
+                observer.report_changed(report)
