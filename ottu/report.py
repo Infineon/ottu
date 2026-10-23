@@ -57,6 +57,18 @@ class TestReportObserver(Protocol):
         """Handle one lifecycle report."""
 
 
+class TestReportNotifier:
+    """Fan one test report out to every observer."""
+
+    def __init__(self, observers: Sequence[TestReportObserver] = ()) -> None:
+        self._observers = tuple(observers)
+
+    def notify(self, report: TestReport) -> None:
+        """Hand the report to each observer in order."""
+        for observer in self._observers:
+            observer.report_changed(report)
+
+
 class QueueTestReportObserver:
     """Publish a child-process test report to a parent queue."""
 
@@ -76,10 +88,10 @@ class QueueTestReportObserver:
         return self._event_queue
 
 
-class QueueTestReportNotifier:
-    """Coordinate parallel processes reports by using an event queue.
-    The notifier registers child processes, drains their test reports from
-    the shared queue, and forwards them to the final observers."""
+class QueueTestReportRelay:
+    """Relay reports from parallel child processes to the final observers.
+    The relay registers child processes, drains their test reports from
+    the shared queue, and forwards them to a notifier."""
 
     def __init__(
         self,
@@ -88,7 +100,7 @@ class QueueTestReportNotifier:
         event_queue: Queue[TestReport] | None = None,
     ) -> None:
         self._event_queue = event_queue if event_queue is not None else Queue()
-        self._observers = tuple(observers)
+        self._notifier = TestReportNotifier(observers)
         self._processes: list[Process] = []
 
     @property
@@ -107,10 +119,10 @@ class QueueTestReportNotifier:
         return bool(is_alive and is_alive())
 
     def register_process(self, process: Process) -> None:
-        """Register a process whose events this observer will forward."""
+        """Register a process whose reports this relay will forward."""
         self._processes.append(process)
 
-    def notify(self) -> list[TestReport]:
+    def forward(self) -> list[TestReport]:
         """Drain queued reports, notify the final observers, and return them."""
         reports: list[TestReport] = []
         while True:
@@ -119,5 +131,4 @@ class QueueTestReportNotifier:
             except Empty:
                 return reports
             reports.append(report)
-            for observer in self._observers:
-                observer.report_changed(report)
+            self._notifier.notify(report)

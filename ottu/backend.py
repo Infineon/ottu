@@ -14,7 +14,7 @@ import yaml
 from ottu.backend_builtins import BACKEND_BUILTINS
 from ottu.config_models.project.config import ProjectConfig
 from ottu.device import Device
-from ottu.report import TestReport, TestReportObserver, TestStatus
+from ottu.report import TestReport, TestReportNotifier, TestStatus
 from ottu.test_path import TestPath
 
 
@@ -114,11 +114,12 @@ class Backend:
         *,
         working_dir: str | Path | None = None,
         run_command: Callable[..., Any] = subprocess.run,
-        observers: Sequence[TestReportObserver] = (),
+        notifier: TestReportNotifier | None = None,
         defines: Sequence[str] = (),
     ) -> None:
         """Run backend commands for a resolved device.
 
+        Each stage is announced through the notifier, if given.
         ``defines`` are bare ``NAME=value`` strings for the build step only. They
         fill the ``{defines}`` placeholder, and a build command without it
         ignores them.
@@ -133,12 +134,8 @@ class Backend:
             if configured_command is None:
                 continue
             command = self._render(configured_command, variables, step_defines)
-            self._notify(
-                observers,
-                test_path,
-                status,
-                device=device,
-            )
+            if notifier is not None:
+                notifier.notify(TestReport(test_path, status, device=device))
             try:
                 run_command(
                     command,
@@ -172,17 +169,3 @@ class Backend:
             else:
                 arguments.append(argument.format_map(values))
         return tuple(arguments)
-
-    @staticmethod
-    def _notify(
-        observers: Sequence[TestReportObserver],
-        test_path: TestPath,
-        status: TestStatus,
-        device: Device,
-    ) -> None:
-        """Notify observers about a backend execution stage."""
-        if not observers:
-            return
-        report = TestReport(test_path, status, device=device)
-        for observer in observers:
-            observer.report_changed(report)
