@@ -1,5 +1,6 @@
 """Runtime device parsing and acquisition."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -44,15 +45,32 @@ class Device:
                 raise ValueError("Device parameters must use key=value format.")
             if key in values:
                 raise ValueError(f"Device parameter '{key}' was provided twice.")
-            field = DeviceDefinition.model_fields.get(key)
-            if field is None or key == "features":
-                raise ValueError(f"Unsupported device parameter '{key}'.")
+            cls._validate_parameter(key)
             values[key] = item_value
 
+        return cls.from_mapping(values)
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> "Device":
+        """Create a device from ``name``, ``uid`` and ``address`` values.
+
+        These are the same parameters that the ``key=value`` form accepts, so
+        the two forms describe a device in the same way.
+        """
+        for key, value in values.items():
+            cls._validate_parameter(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"Device parameter '{key}' must be a string.")
         return cls(
             name=values.get("name"),
             access=cls._resolve_access(values.get("address"), values.get("uid")),
         )
+
+    @staticmethod
+    def _validate_parameter(key: str) -> None:
+        field = DeviceDefinition.model_fields.get(key)
+        if field is None or key == "features":
+            raise ValueError(f"Unsupported device parameter '{key}'.")
 
     @staticmethod
     def _resolve_access(address: str | None, uid: str | None) -> DeviceAccess | None:

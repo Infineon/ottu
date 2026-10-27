@@ -43,18 +43,7 @@ class DeviceQuery:
         if limit is not None and limit < 1:
             raise ValueError("Device query limit must be positive.")
 
-        if device_filter is None:
-            filters: tuple[DeviceFilter, ...] = ()
-        elif isinstance(device_filter, str) and "=" not in device_filter:
-            filters = Device.from_string(device_filter).identity_filters()
-        elif isinstance(device_filter, Sequence) and not isinstance(
-            device_filter, (str, bytes)
-        ):
-            filters = tuple(device_filter)
-        else:
-            filters = (device_filter,)
-
-        parsed = [DeviceQuery._parse_filter(value) for value in filters]
+        parsed = DeviceQuery.parse(device_filter)
         for device_filter_values in parsed:
             for filter_key in device_filter_values:
                 Device.validate_key(filter_key)
@@ -70,6 +59,53 @@ class DeviceQuery:
             if limit is not None and len(matches) == limit:
                 break
         return matches
+
+    @staticmethod
+    def parse(
+        device_filter: DeviceFilter | Sequence[DeviceFilter] | None,
+    ) -> list[Mapping[str, Any]]:
+        """Return the filter mappings that a device query stands for.
+
+        A bare string stands for the identity filters of a device (name, UID
+        or address), key-value strings are parsed, and mappings are kept. The
+        result lists alternatives: a device matches when any one of them
+        matches, and no filters match every device. Keys are not validated,
+        so callers may carry extra keys such as a role.
+
+        Examples:
+            ``parse("name=uno,uid=abc123")`` returns
+            ``[{"name": "uno", "uid": "abc123"}]``.
+            ``parse("uno")`` returns one filter for each identity key.
+        """
+        if device_filter is None:
+            filters: tuple[DeviceFilter, ...] = ()
+        elif isinstance(device_filter, str) and "=" not in device_filter:
+            filters = Device.from_string(device_filter).identity_filters()
+        elif isinstance(device_filter, Sequence) and not isinstance(
+            device_filter, (str, bytes)
+        ):
+            filters = tuple(device_filter)
+        else:
+            filters = (device_filter,)
+        return [DeviceQuery._parse_filter(value) for value in filters]
+
+    @staticmethod
+    def combine(
+        first: Mapping[str, Any], second: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        """Require two filters to match together, or return ``None``.
+
+        A key set by both filters must have the same value; otherwise no
+        device could satisfy both and there is no combined filter.
+
+        Examples:
+            ``combine({"name": "uno"}, {"uid": "abc"})`` returns
+            ``{"name": "uno", "uid": "abc"}``.
+            ``combine({"name": "uno"}, {"name": "nano"})`` returns ``None``.
+        """
+        if any(key in first and first[key] != value for key, value in second.items()):
+            return None
+        return {**first, **second}
 
     @staticmethod
     def select(

@@ -4,7 +4,7 @@ from serial.tools.list_ports import comports
 
 from .access import ConnectionConfig, DeviceAccess, DeviceConnection
 from .device import Device
-from .query import DeviceQuery, query
+from .query import DeviceFilter, DeviceQuery, query
 from .serial import DeviceAccessSerial
 
 __all__ = [
@@ -13,6 +13,7 @@ __all__ = [
     "DeviceAccess",
     "DeviceAccessSerial",
     "DeviceConnection",
+    "DeviceFilter",
     "DeviceQuery",
     "comports",
     "query",
