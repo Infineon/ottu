@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 
@@ -51,11 +52,18 @@ class Backend:
     ``define_prefix`` is written in front of every build define that fills the
     ``{defines}`` placeholder: ``-D`` for most compilers, or something else
     (even empty) for toolchains that take defines another way.
+
+    Programming a device can fail for transient reasons, such as a dropped USB
+    transfer, so the program command is attempted up to ``program_attempts``
+    times before its failure is raised. The build command is never retried.
     """
 
     build: tuple[str, ...] | None = None
     program: tuple[str, ...] | None = None
     define_prefix: str = "-D"
+    program_attempts: int = 3
+
+    RETRY_DELAY_SECONDS: ClassVar[float] = 1.0
 
     @classmethod
     def load(cls, project_root: str | Path | None = None) -> Backend:
@@ -97,7 +105,14 @@ class Backend:
         define_prefix = raw_steps.get("define_prefix", cls.define_prefix)
         if not isinstance(define_prefix, str):
             raise ValueError("Backend 'define_prefix' must be a string.")
-        return cls(**commands, define_prefix=define_prefix)
+        program_attempts = raw_steps.get("program_attempts", cls.program_attempts)
+        if type(program_attempts) is not int or program_attempts < 1:
+            raise ValueError("Backend 'program_attempts' must be a positive integer.")
+        return cls(
+            **commands,
+            define_prefix=define_prefix,
+            program_attempts=program_attempts,
+        )
 
     @staticmethod
     def _parse_command(name: str, value: str | Sequence[str]) -> tuple[str, ...]:
@@ -116,38 +131,44 @@ class Backend:
         run_command: Callable[..., Any] = subprocess.run,
         notifier: TestReportNotifier | None = None,
         defines: Sequence[str] = (),
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         """Run backend commands for a resolved device.
 
         Each stage is announced through the notifier, if given.
         ``defines`` are bare ``NAME=value`` strings for the build step only. They
         fill the ``{defines}`` placeholder, and a build command without it
-        ignores them.
+        ignores them. A failed program command is retried, pausing between
+        attempts, and only its last failure is raised.
         """
         variables = device.backend_variables()
         variables.setdefault("device", "")
         variables["test_path"] = str(test_path.absolute_path)
-        for configured_command, status, step_defines in (
-            (self.build, TestStatus.BUILDING, defines),
-            (self.program, TestStatus.FLASHING, ()),
+        for configured_command, status, step_defines, attempts in (
+            (self.build, TestStatus.BUILDING, defines, 1),
+            (self.program, TestStatus.FLASHING, (), self.program_attempts),
         ):
             if configured_command is None:
                 continue
             command = self._render(configured_command, variables, step_defines)
             if notifier is not None:
                 notifier.notify(TestReport(test_path, status, device=device))
-            try:
-                run_command(
-                    command,
-                    cwd=working_dir,
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                )
-            except subprocess.CalledProcessError as error:
-                raise BackendCommandError(
-                    error.returncode, error.cmd, error.output, error.stderr
-                ) from error
+            for attempt in range(1, attempts + 1):
+                try:
+                    run_command(
+                        command,
+                        cwd=working_dir,
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                    )
+                    break
+                except subprocess.CalledProcessError as error:
+                    if attempt == attempts:
+                        raise BackendCommandError(
+                            error.returncode, error.cmd, error.output, error.stderr
+                        ) from error
+                    sleep(self.RETRY_DELAY_SECONDS)
 
     def _render(
         self,
