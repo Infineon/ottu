@@ -1281,3 +1281,181 @@ def test_run_parallel_processes_drains_live_reports():
 
     assert Suite.run_parallel_processes([FakeProcess()], relay) == []
     assert relay.notifications == 2
+
+
+def test_suite_from_roles_routes_mapping_devices_by_role(tmp_path):
+    """Mapping device filters are routed to roles through their role key."""
+    (tmp_path / "server.py").touch()
+    (tmp_path / "client.py").touch()
+
+    suite = Suite.from_roles(
+        {"server": "server.py", "client": "client.py"},
+        devices=(
+            {"role": "server", "address": "/dev/ttyUSB0"},
+            {"role": "client", "address": "/dev/ttyUSB1"},
+        ),
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert suite.runner == "runner_parallel"
+    assert [(test.options.role, test.device) for test in suite.tests] == [
+        ("server", Device.from_string("address=/dev/ttyUSB0")),
+        ("client", Device.from_string("address=/dev/ttyUSB1")),
+    ]
+
+
+def test_suite_from_roles_broadcasts_one_mapping_without_a_role(tmp_path):
+    """One device mapping without a role applies to every role."""
+    (tmp_path / "server.py").touch()
+    (tmp_path / "client.py").touch()
+
+    suite = Suite.from_roles(
+        {"server": "server.py", "client": "client.py"},
+        devices=({"name": "board-1"},),
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert [test.device for test in suite.tests] == [Device(name="board-1")] * 2
+
+
+def test_suite_from_roles_applies_counts(tmp_path, monkeypatch):
+    """Roles run on as many devices as their count, one by default."""
+    monkeypatch.setattr(
+        "ottu.device.DeviceAccessSerial.is_connected", lambda self: True
+    )
+    (tmp_path / "server.py").touch()
+    (tmp_path / "client.py").touch()
+    (tmp_path / "devices.yml").write_text(
+        "version: 1\n"
+        "devices:\n"
+        "  - {name: srv, uid: abcdef01, features: []}\n"
+        "  - {name: cl, uid: abcdef02, features: []}\n"
+        "  - {name: cl, uid: abcdef03, features: []}\n",
+        encoding="utf-8",
+    )
+
+    suite = Suite.from_roles(
+        {"server": "server.py", "client": "client.py"},
+        counts={"client": 2},
+        devices=({"role": "server", "name": "srv"}, {"role": "client", "name": "cl"}),
+        context=TestPathContext(working_dir=tmp_path),
+        dev_list=tmp_path / "devices.yml",
+    )
+
+    assert [(test.options.role, test.device.name) for test in suite.tests] == [
+        ("server", "srv"),
+        ("client", "cl"),
+        ("client", "cl"),
+    ]
+
+
+def test_suite_from_roles_rejects_a_missing_device_without_a_list(tmp_path):
+    """Without devices or a device list a role has nothing to run on."""
+    (tmp_path / "server.py").touch()
+
+    with pytest.raises(ValueError, match="Role 'server' requires a device"):
+        Suite.from_roles(
+            {"server": "server.py"},
+            context=TestPathContext(working_dir=tmp_path),
+        )
+
+
+def test_suite_from_roles_gives_every_role_any_device_of_the_list(
+    tmp_path, monkeypatch
+):
+    """With a device list and no filters each role takes a distinct device."""
+    monkeypatch.setattr(
+        "ottu.device.DeviceAccessSerial.is_connected", lambda self: True
+    )
+    (tmp_path / "server.py").touch()
+    (tmp_path / "client.py").touch()
+    (tmp_path / "devices.yml").write_text(
+        "version: 1\n"
+        "devices:\n"
+        "  - {name: one, uid: abcdef01, features: []}\n"
+        "  - {name: two, uid: abcdef02, features: []}\n",
+        encoding="utf-8",
+    )
+
+    suite = Suite.from_roles(
+        {"server": "server.py", "client": "client.py"},
+        context=TestPathContext(working_dir=tmp_path),
+        dev_list=tmp_path / "devices.yml",
+    )
+
+    assert [test.device.name for test in suite.tests] == ["one", "two"]
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_suite_from_roles_rejects_non_positive_counts(tmp_path, count):
+    """A role count must be a positive integer."""
+    (tmp_path / "server.py").touch()
+
+    with pytest.raises(ValueError, match="count must be a positive integer"):
+        Suite.from_roles(
+            {"server": "server.py"},
+            counts={"server": count},
+            devices=({"name": "board-1"},),
+            context=TestPathContext(working_dir=tmp_path),
+        )
+
+
+def test_suite_from_roles_rejects_a_role_test_pattern(tmp_path):
+    """Role tests must name one file, not a pattern."""
+    with pytest.raises(ValueError, match="not a pattern"):
+        Suite.from_roles(
+            {"server": "*.py"},
+            devices=({"name": "board-1"},),
+            context=TestPathContext(working_dir=tmp_path),
+        )
+
+
+def test_suite_from_roles_rejects_an_unknown_device_role(tmp_path):
+    """A device filter for a role without a test is rejected."""
+    (tmp_path / "server.py").touch()
+
+    with pytest.raises(ValueError, match="Unknown role 'client'"):
+        Suite.from_roles(
+            {"server": "server.py"},
+            devices=({"role": "client", "name": "board-1"},),
+            context=TestPathContext(working_dir=tmp_path),
+        )
+
+
+def test_suite_from_roles_rejects_mixing_roles_and_plain_devices(tmp_path):
+    """Role filters cannot be mixed with filters without a role."""
+    (tmp_path / "server.py").touch()
+    (tmp_path / "client.py").touch()
+
+    with pytest.raises(ValueError, match="cannot be mixed"):
+        Suite.from_roles(
+            {"server": "server.py", "client": "client.py"},
+            devices=({"role": "server", "name": "a"}, {"name": "b"}),
+            context=TestPathContext(working_dir=tmp_path),
+        )
+
+
+def test_suite_from_inputs_accepts_mapping_devices_for_a_standard_suite(tmp_path):
+    """Standard suites resolve device mappings like key=value strings."""
+    (tmp_path / "check.py").touch()
+
+    suite = Suite.from_inputs(
+        ["check.py"],
+        devices=({"name": "board, one"},),
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert [device.name for device in suite.resolved_devices] == ["board, one"]
+
+
+def test_role_suite_from_inputs_accepts_mapping_devices(tmp_path):
+    """Role inputs accept device mappings, with or without a role key."""
+    (tmp_path / "server.py").touch()
+
+    suite = Suite.from_inputs(
+        ["server=server.py"],
+        devices=({"role": "server", "name": "board-1"},),
+        context=TestPathContext(working_dir=tmp_path),
+    )
+
+    assert [test.device.name for test in suite.tests] == ["board-1"]
