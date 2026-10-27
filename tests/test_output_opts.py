@@ -59,7 +59,7 @@ def test_test_output_opts_with_default_values_are_equal():
 
 
 def test_test_output_opts_default_idle_timeout():
-    assert TestOutputOpts().idle_timeout == 20.0
+    assert TestOutputOpts().idle_timeout == 60.0
 
 
 def test_framed_output_uses_given_options():
