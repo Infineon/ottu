@@ -236,3 +236,75 @@ def test_query_without_connection_check_resolves_known_address(devices):
 def test_query_rejects_unknown_keys(devices, key, filters):
     with pytest.raises(ValueError, match="Unsupported device key"):
         query(devices, key, filters)
+
+
+def test_parse_without_a_query_has_no_filters():
+    assert DeviceQuery.parse(None) == []
+
+
+def test_parse_reads_key_value_strings():
+    assert DeviceQuery.parse("name=uno,uid=abc123") == [
+        {"name": "uno", "uid": "abc123"}
+    ]
+
+
+def test_parse_reads_json_values():
+    assert DeviceQuery.parse('features=["wifi", "ble"]') == [
+        {"features": ["wifi", "ble"]}
+    ]
+
+
+def test_parse_expands_a_bare_name_to_identity_filters():
+    assert DeviceQuery.parse("uno") == [{"name": "uno"}]
+
+
+def test_parse_expands_a_bare_address_to_identity_filters():
+    assert DeviceQuery.parse("/dev/ttyUSB0") == [{"address": "/dev/ttyUSB0"}]
+
+
+def test_parse_keeps_a_mapping():
+    assert DeviceQuery.parse({"name": "uno"}) == [{"name": "uno"}]
+
+
+def test_parse_keeps_each_filter_of_a_sequence_as_an_alternative():
+    assert DeviceQuery.parse([{"name": "uno"}, "name=nano"]) == [
+        {"name": "uno"},
+        {"name": "nano"},
+    ]
+
+
+def test_parse_does_not_validate_keys():
+    assert DeviceQuery.parse("role=server") == [{"role": "server"}]
+
+
+def test_parse_rejects_malformed_key_value_strings():
+    with pytest.raises(ValueError, match="key=value"):
+        DeviceQuery.parse("name=uno,oops")
+
+
+def test_combine_merges_filters_with_different_keys():
+    assert DeviceQuery.combine({"name": "uno"}, {"uid": "abc123"}) == {
+        "name": "uno",
+        "uid": "abc123",
+    }
+
+
+def test_combine_accepts_a_shared_key_with_the_same_value():
+    assert DeviceQuery.combine({"name": "uno"}, {"name": "uno", "uid": "abc"}) == {
+        "name": "uno",
+        "uid": "abc",
+    }
+
+
+def test_combine_rejects_contradicting_filters():
+    assert DeviceQuery.combine({"name": "uno"}, {"name": "nano"}) is None
+
+
+def test_combine_does_not_change_its_arguments():
+    first = {"name": "uno"}
+    second = {"uid": "abc"}
+
+    DeviceQuery.combine(first, second)
+
+    assert first == {"name": "uno"}
+    assert second == {"uid": "abc"}

@@ -202,3 +202,36 @@ def test_device_is_connected_delegates_to_access():
 
 def test_device_without_access_is_not_connected():
     assert Device(name="board-1").is_connected() is False
+
+
+def test_device_from_mapping_matches_the_key_value_form():
+    values = {"name": "board-1", "uid": "abc123", "address": "/dev/ttyUSB0"}
+
+    device = Device.from_mapping(values)
+
+    assert device == Device.from_string("name=board-1,uid=abc123,address=/dev/ttyUSB0")
+    assert device.name == "board-1"
+
+
+def test_device_from_mapping_accepts_a_name_only():
+    assert Device.from_mapping({"name": "board-1"}) == Device(name="board-1")
+
+
+def test_device_from_mapping_accepts_values_with_commas():
+    assert Device.from_mapping({"name": "board, one"}).name == "board, one"
+
+
+def test_device_from_mapping_without_values_is_an_empty_device():
+    assert Device.from_mapping({}) == Device()
+
+
+@pytest.mark.parametrize("key", ["features", "role", "timeout"])
+def test_device_from_mapping_rejects_unsupported_parameters(key):
+    with pytest.raises(ValueError, match=f"Unsupported device parameter '{key}'"):
+        Device.from_mapping({key: "value"})
+
+
+@pytest.mark.parametrize("value", [1, None, ["a"], "", "  "])
+def test_device_from_mapping_rejects_non_string_values(value):
+    with pytest.raises(ValueError, match="'name' must be a string"):
+        Device.from_mapping({"name": value})
