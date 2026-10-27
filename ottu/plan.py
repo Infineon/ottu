@@ -1,6 +1,5 @@
 """Select and build the suites of a test plan."""
 
-import json
 from collections.abc import Mapping, Sequence
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -8,7 +7,7 @@ from typing import Any
 
 from ottu.backend import Backend
 from ottu.config_models.plan.plan import PlanConfig, RoleTest, SuiteDefinition
-from ottu.device import Device, DeviceQuery
+from ottu.device import DeviceFilter, DeviceQuery
 from ottu.report import TestReportObserver
 from ottu.suite import Suite
 from ottu.test_path import TestPathContext
@@ -85,41 +84,29 @@ class Plan:
         backend: Backend | None,
         observers: Sequence[TestReportObserver],
     ) -> Suite:
-        """Translate one plan suite into the inputs of ``Suite.from_inputs``."""
+        """Translate one plan suite into an executable suite."""
+        device_filters = cls._device_filters(suite.requires.device, devices, dev_list)
         role_tests = [test for test in suite.tests if isinstance(test, RoleTest)]
-        count: str | None
         if role_tests:
-            test_inputs = [f"{test.role}={test.test}" for test in role_tests]
-            count = ",".join(f"{test.role}={test.count}" for test in role_tests)
-        else:
-            test_inputs = [test for test in suite.tests if isinstance(test, str)]
-            count = str(suite.count) if suite.count is not None else None
+            return Suite.from_roles(
+                {test.role: test.test for test in role_tests},
+                counts={test.role: test.count for test in role_tests},
+                devices=device_filters,
+                context=context,
+                dev_list=dev_list,
+                backend=backend,
+                observers=observers,
+            )
         return Suite.from_inputs(
-            test_inputs,
+            [test for test in suite.tests if isinstance(test, str)],
             context=context,
             exclude=suite.exclude,
-            count=count,
-            devices=cls._suite_devices(
-                role_tests, suite.requires.device, devices, dev_list
-            ),
+            count=str(suite.count) if suite.count is not None else None,
+            devices=device_filters,
             dev_list=dev_list,
             backend=backend,
             observers=observers,
         )
-
-    @classmethod
-    def _suite_devices(
-        cls,
-        role_tests: Sequence[RoleTest],
-        required: Sequence[Mapping[str, Any]],
-        devices: Sequence[str],
-        dev_list: Path | None,
-    ) -> list[str]:
-        """Return the suite device inputs, defaulting roles to any device."""
-        device_inputs = cls._device_inputs(required, devices, dev_list)
-        if role_tests and not device_inputs and dev_list is not None:
-            return [f"role={test.role}" for test in role_tests]
-        return device_inputs
 
     @staticmethod
     def _matches(suite: SuiteDefinition, patterns: Sequence[str]) -> bool:
@@ -128,64 +115,37 @@ class Plan:
             fnmatchcase(suite.name, pattern) for pattern in patterns
         )
 
-    @classmethod
-    def _device_inputs(
-        cls,
+    @staticmethod
+    def _device_filters(
         required: Sequence[Mapping[str, Any]],
         devices: Sequence[str],
         dev_list: Path | None,
-    ) -> list[str]:
-        """Return the device inputs of a suite as CLI ``--device`` strings."""
+    ) -> list[DeviceFilter]:
+        """Return the device filters of a suite.
+
+        Without ``--device`` values these are the suite's ``requires.device``
+        entries. With a device list, every ``--device`` query is combined (AND)
+        with every entry; contradicting pairs are dropped and at least one
+        pair must remain. Without a device list, or without entries, the
+        ``--device`` values are used as given.
+        """
         if not devices:
-            return [cls._format_filter(entry) for entry in required]
+            return [*required]
         if dev_list is None or not required:
-            return list(devices)
+            return [*devices]
 
-        merged = [
-            cls._format_filter(combined)
-            for entry in required
-            for alternative in cls._query_filters(devices)
-            if (combined := cls._combine(entry, alternative)) is not None
+        queries = [
+            filter_ for device in devices for filter_ in DeviceQuery.parse(device)
         ]
-        if not merged:
+        combined_filters: list[DeviceFilter] = [
+            combined
+            for entry in required
+            for query in queries
+            if (combined := DeviceQuery.combine(entry, query)) is not None
+        ]
+        if not combined_filters:
             raise ValueError("The --device queries conflict with requires.device.")
-        return merged
-
-    @staticmethod
-    def _query_filters(devices: Sequence[str]) -> list[Mapping[str, Any]]:
-        """Parse ``--device`` queries into filter mappings."""
-        filters: list[Mapping[str, Any]] = []
-        for device in devices:
-            if "=" in device:
-                filters.append(DeviceQuery._parse_filter(device))
-            else:
-                filters.extend(Device.from_string(device).identity_filters())
-        return filters
-
-    @staticmethod
-    def _combine(
-        first: Mapping[str, Any], second: Mapping[str, Any]
-    ) -> dict[str, Any] | None:
-        """AND two filters, or return ``None`` when they contradict."""
-        if any(key in first and first[key] != value for key, value in second.items()):
-            return None
-        return {**first, **second}
-
-    @staticmethod
-    def _format_filter(device_filter: Mapping[str, Any]) -> str:
-        """Format a filter mapping as a comma-separated ``key=value`` string."""
-        parts: list[str] = []
-        for key, value in device_filter.items():
-            if isinstance(value, (list, dict)):
-                text = json.dumps(value)
-            else:
-                text = str(value)
-                if "," in text or text.startswith(("{", "[")):
-                    raise ValueError(
-                        f"Device value for '{key}' cannot be expressed as a query."
-                    )
-            parts.append(f"{key}={text}")
-        return ",".join(parts)
+        return combined_filters
 
 
 __all__ = ["Plan"]
