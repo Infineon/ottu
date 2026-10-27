@@ -177,7 +177,7 @@ class SuiteBuilder:
         matching_devices: list[Device] = []
         query_inputs = device_queries or (None,)
         for query in query_inputs:
-            for device in DeviceQuery.find(available_devices, query):
+            for device in DeviceQuery.find(available_devices, query or None):
                 if device not in matching_devices:
                     matching_devices.append(device)
         return tuple(matching_devices)
