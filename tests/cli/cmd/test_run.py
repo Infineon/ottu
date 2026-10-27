@@ -512,3 +512,120 @@ def test_run_rejects_missing_exclusion(project):
     assert result.exit_code != 0
     assert isinstance(result.exception, ValueError)
     assert str(result.exception) == "Test path 'missing.py' does not exist."
+
+
+@pytest.fixture
+def plan_file(project):
+    """Create two test files and a plan with one suite for each."""
+    root, _ = project
+    (root / "a.py").touch()
+    (root / "b.py").touch()
+    path = root / "plan.yml"
+    path.write_text(
+        "version: 1\n"
+        "suites:\n"
+        "  - name: first\n"
+        "    tests: a.py\n"
+        "  - name: second\n"
+        "    tests: b.py\n",
+        encoding="utf-8",
+    )
+    return root, path
+
+
+def run_plan(root, path, *args):
+    return CliRunner().invoke(
+        cli,
+        ["--working-dir", str(root), "run", "--plan", str(path), *args],
+    )
+
+
+def test_run_plan_runs_every_suite(plan_file):
+    root, path = plan_file
+
+    result = run_plan(root, path, "--device", "board-1")
+
+    assert result.exit_code == 0
+    assert "a.py" in result.output
+    assert "b.py" in result.output
+
+
+def test_run_plan_selects_suites_by_name(plan_file):
+    root, path = plan_file
+
+    result = run_plan(root, path, "--device", "board-1", "second")
+
+    assert result.exit_code == 0
+    assert "b.py" in result.output
+    assert "a.py" not in result.output
+
+
+def test_run_plan_excludes_suites_by_name(plan_file):
+    root, path = plan_file
+
+    result = run_plan(root, path, "--device", "board-1", "--exclude", "second")
+
+    assert result.exit_code == 0
+    assert "a.py" in result.output
+    assert "b.py" not in result.output
+
+
+def test_run_plan_rejects_unknown_suite_name(plan_file):
+    root, path = plan_file
+
+    result = run_plan(root, path, "--device", "board-1", "missing")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, ValueError)
+    assert str(result.exception) == "No suite in the plan matches 'missing'."
+
+
+def test_run_plan_rejects_count(plan_file):
+    root, path = plan_file
+
+    result = run_plan(root, path, "--device", "board-1", "--count", "2")
+
+    assert result.exit_code == 2
+    assert "--count cannot be used with --plan." in result.output
+
+
+def test_run_plan_rejects_jobs(plan_file):
+    root, path = plan_file
+
+    result = run_plan(root, path, "--device", "board-1", "--jobs", "2")
+
+    assert result.exit_code == 2
+    assert "--jobs cannot be used with --plan." in result.output
+
+
+def test_run_plan_accepts_default_jobs(plan_file):
+    root, path = plan_file
+
+    result = run_plan(root, path, "--device", "board-1")
+
+    assert result.exit_code == 0
+
+
+def test_run_plan_rejects_missing_plan_file(project):
+    root, _ = project
+
+    result = run_plan(root, root / "missing.yml", "--device", "board-1")
+
+    assert result.exit_code == 2
+    assert "missing.yml" in result.output
+
+
+def test_run_plan_uses_requires_when_no_device_is_given(project):
+    root, _ = project
+    (root / "a.py").touch()
+    plan = root / "plan.yml"
+    plan.write_text(
+        "version: 1\nsuites:\n  - tests: a.py\n    requires:\n"
+        "      device: [{name: board-1}]\n",
+        encoding="utf-8",
+    )
+
+    result = run_plan(root, plan)
+
+    assert result.exit_code == 0
+    assert "PASS" in result.output
