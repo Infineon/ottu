@@ -1,0 +1,15 @@
+version: 1
+
+suites:
+  - name: hello
+    tests:
+      - hello-world
+      - hello-universe
+      - hello-continent
+
+  - name: network
+    tests:
+      - role: server
+        test: server
+      - role: client
+        test: client
