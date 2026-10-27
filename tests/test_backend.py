@@ -16,23 +16,32 @@ def make_test(name="check.py"):
     return Test(TestPath(name, name, None, name))
 
 
-def failing_run(output, stage_to_fail=None):
-    """Return a run_command that fails with the given captured output."""
+def failing_run(output, stage_to_fail=None, fail_from=None):
+    """Return a run_command that fails with the given captured output.
+
+    It fails every call, only the ``stage_to_fail``-th call, or every call from
+    the ``fail_from``-th on.
+    """
     calls = []
 
     def run_command(command, **kwargs):
         calls.append(command)
-        if stage_to_fail is None or len(calls) == stage_to_fail:
+        if fail_from is not None:
+            failing = len(calls) >= fail_from
+        else:
+            failing = stage_to_fail is None or len(calls) == stage_to_fail
+        if failing:
             raise subprocess.CalledProcessError(1, command, output=output)
 
     return run_command, calls
 
 
-def run_failing(backend, run_command):
+def run_failing(backend, run_command, sleeps=None):
     backend.run(
         make_test("tests/hello-world.py").test_path,
         Device(name="uno"),
         run_command=run_command,
+        sleep=sleeps.append if sleeps is not None else lambda delay: None,
     )
 
 
@@ -372,12 +381,92 @@ def test_failed_command_error_is_still_a_called_process_error():
 
 def test_failed_program_step_also_reports_its_output():
     backend = Backend.from_mapping({"build": "gcc main.c", "program": "flash now"})
-    run_command, calls = failing_run(b"no device found\n", stage_to_fail=2)
+    run_command, calls = failing_run(b"no device found\n", fail_from=2)
 
     with pytest.raises(BackendCommandError, match="no device found"):
         run_failing(backend, run_command)
 
-    assert calls == [("gcc", "main.c"), ("flash", "now")]
+    assert calls == [("gcc", "main.c")] + [("flash", "now")] * 3
+
+
+def test_program_step_is_retried_until_it_succeeds():
+    backend = Backend.from_mapping({"build": "gcc main.c", "program": "flash now"})
+    run_command, calls = failing_run(b"usb glitch\n", stage_to_fail=2)
+    sleeps = []
+
+    run_failing(backend, run_command, sleeps)
+
+    assert calls == [("gcc", "main.c"), ("flash", "now"), ("flash", "now")]
+    assert sleeps == [Backend.RETRY_DELAY_SECONDS]
+
+
+def test_program_step_gives_up_after_the_configured_attempts():
+    backend = Backend.from_mapping({"program": "flash now", "program_attempts": 2})
+    run_command, calls = failing_run(b"no device found\n")
+    sleeps = []
+
+    with pytest.raises(BackendCommandError, match="no device found"):
+        run_failing(backend, run_command, sleeps)
+
+    assert calls == [("flash", "now")] * 2
+    assert sleeps == [Backend.RETRY_DELAY_SECONDS]
+
+
+def test_program_step_can_be_attempted_only_once():
+    backend = Backend.from_mapping({"program": "flash now", "program_attempts": 1})
+    run_command, calls = failing_run(b"no device found\n")
+    sleeps = []
+
+    with pytest.raises(BackendCommandError):
+        run_failing(backend, run_command, sleeps)
+
+    assert calls == [("flash", "now")]
+    assert sleeps == []
+
+
+def test_build_step_is_never_retried():
+    backend = Backend.from_mapping({"build": "gcc main.c", "program": "flash now"})
+    run_command, calls = failing_run(b"syntax error\n", stage_to_fail=1)
+    sleeps = []
+
+    with pytest.raises(BackendCommandError, match="syntax error"):
+        run_failing(backend, run_command, sleeps)
+
+    assert calls == [("gcc", "main.c")]
+    assert sleeps == []
+
+
+def test_retried_program_step_is_announced_once():
+    backend = Backend.from_mapping({"program": "flash now"})
+    run_command, _ = failing_run(b"usb glitch\n", stage_to_fail=1)
+    observer = RecordingObserver()
+
+    backend.run(
+        make_test("check.py").test_path,
+        Device(name="uno"),
+        run_command=run_command,
+        notifier=TestReportNotifier([observer]),
+        sleep=lambda delay: None,
+    )
+
+    assert [event.status for event in observer.events] == [TestStatus.FLASHING]
+
+
+def test_backend_defaults_to_three_program_attempts():
+    assert Backend.from_mapping({"program": "flash now"}).program_attempts == 3
+
+
+def test_backend_loads_program_attempts_from_yaml(tmp_path):
+    path = tmp_path / "backend.yaml"
+    path.write_text("program: flash now\nprogram_attempts: 5\n", encoding="utf-8")
+
+    assert Backend.from_yaml(path).program_attempts == 5
+
+
+@pytest.mark.parametrize("attempts", [0, -1, "3", 1.5, True])
+def test_backend_rejects_invalid_program_attempts(attempts):
+    with pytest.raises(ValueError, match="program_attempts"):
+        Backend.from_mapping({"program": "flash now", "program_attempts": attempts})
 
 
 def test_failed_command_error_keeps_only_the_last_lines_of_long_output():
