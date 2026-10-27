@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from glob import has_magic
 from multiprocessing import Process
@@ -9,7 +9,7 @@ from re import fullmatch
 from typing import cast
 
 from ottu.backend import Backend
-from ottu.device import Device, DeviceQuery
+from ottu.device import Device, DeviceFilter, DeviceQuery
 from ottu.report import (
     QueueTestReportObserver,
     QueueTestReportRelay,
@@ -71,7 +71,7 @@ class SuiteBuilder:
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
-        devices: Sequence[str] = (),
+        devices: Sequence[DeviceFilter] = (),
         dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
@@ -132,16 +132,17 @@ class SuiteBuilder:
 
     @staticmethod
     def _resolve_devices(
-        device_inputs: Sequence[str],
+        device_inputs: Sequence[DeviceFilter],
         available_devices: Path | Sequence[Device] | None,
     ) -> tuple[Device, ...]:
         """Resolve device definitions or queries from the supplied input.
 
+        Each input is a ``key=value`` string or a mapping of device values.
         ``available_devices`` may be a path to a YAML device list or an already-loaded
         sequence of devices. The latter lets role suites resolve and reserve
         devices incrementally without reloading the full list for each role.
-        When it is ``None``, each query is resolved directly with
-        :meth:`Device.from_string`.
+        When it is ``None``, each input is resolved directly with
+        :meth:`Device.from_string` or :meth:`Device.from_mapping`.
         """
         if available_devices is None:
             return SuiteBuilder._resolve_devices_from_definitions(device_inputs)
@@ -157,20 +158,23 @@ class SuiteBuilder:
 
     @staticmethod
     def _resolve_devices_from_definitions(
-        device_definitions: Sequence[str],
+        device_definitions: Sequence[DeviceFilter],
     ) -> tuple[Device, ...]:
         """Resolve devices directly from their definitions."""
         if not device_definitions:
             # TODO: Resolve a default device supplied by the backend.
             raise ValueError("At least one device is required.")
         resolved_devices = tuple(
-            Device.from_string(definition) for definition in device_definitions
+            Device.from_string(definition)
+            if isinstance(definition, str)
+            else Device.from_mapping(definition)
+            for definition in device_definitions
         )
         return resolved_devices
 
     @staticmethod
     def _resolve_devices_from_queries(
-        device_queries: Sequence[str],
+        device_queries: Sequence[DeviceFilter],
         available_devices: Sequence[Device],
     ) -> tuple[Device, ...]:
         """Resolve queries by matching them against available devices."""
@@ -189,7 +193,7 @@ class RoleSuiteInputs:
 
     selectors: dict[str, str]
     counts: dict[str, int]
-    devices: dict[str, tuple[str, ...]]
+    devices: dict[str, tuple[DeviceFilter, ...]]
 
 
 class RoleSuiteBuilder(SuiteBuilder):
@@ -208,7 +212,7 @@ class RoleSuiteBuilder(SuiteBuilder):
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
-        devices: Sequence[str] = (),
+        devices: Sequence[DeviceFilter] = (),
         dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
@@ -223,6 +227,66 @@ class RoleSuiteBuilder(SuiteBuilder):
             devices=devices,
             jobs=jobs,
         )
+        return cls.from_parsed(
+            parsed_inputs,
+            context=context,
+            dev_list=dev_list,
+            jobs=jobs,
+            backend=backend,
+            observers=observers,
+        )
+
+    @classmethod
+    def from_roles(
+        cls,
+        selectors: Mapping[str, str],
+        *,
+        counts: Mapping[str, int] | None = None,
+        devices: Sequence[DeviceFilter] = (),
+        context: TestPathContext,
+        dev_list: Path | None = None,
+        backend: Backend | None = None,
+        observers: Sequence[TestReportObserver] = (),
+    ) -> Suite:
+        """Create a role-based suite from values that are already separated.
+
+        ``selectors`` maps each role to its one test file, and ``counts`` maps
+        roles to their device count, which defaults to one. ``devices`` are
+        device filters routed to roles by their ``role`` key, or one filter
+        without a role that applies to every role. Without any device filter
+        and with a device list, every role may use any device of the list.
+        """
+        roles = list(selectors)
+        role_devices: dict[str, tuple[DeviceFilter, ...]]
+        if devices:
+            role_devices = cls._parse_role_devices(devices, roles)
+        elif dev_list is not None:
+            role_devices = {role: ({},) for role in roles}
+        else:
+            role_devices = {}
+        return cls.from_parsed(
+            RoleSuiteInputs(dict(selectors), dict(counts or {}), role_devices),
+            context=context,
+            dev_list=dev_list,
+            backend=backend,
+            observers=observers,
+        )
+
+    @classmethod
+    def from_parsed(
+        cls,
+        parsed_inputs: RoleSuiteInputs,
+        *,
+        context: TestPathContext,
+        dev_list: Path | None = None,
+        jobs: int = 1,
+        backend: Backend | None = None,
+        observers: Sequence[TestReportObserver] = (),
+    ) -> Suite:
+        """Create a role-based suite from validated role inputs."""
+        cls._validate_role_test_files(parsed_inputs.selectors, context)
+        for role_count in parsed_inputs.counts.values():
+            SuiteOpts._validate_count(role_count)
         available_devices = (
             list(Device.from_file(dev_list)) if dev_list is not None else None
         )
@@ -257,7 +321,7 @@ class RoleSuiteBuilder(SuiteBuilder):
         cls,
         role: str,
         role_test: Test,
-        device_queries: Sequence[str],
+        device_queries: Sequence[DeviceFilter],
         available_devices: Sequence[Device] | None,
         required_count: int,
     ) -> tuple[list[Test], list[Device] | None]:
@@ -285,7 +349,7 @@ class RoleSuiteBuilder(SuiteBuilder):
     def _resolve_device(
         cls,
         role: str,
-        device_queries: Sequence[str],
+        device_queries: Sequence[DeviceFilter],
         available_devices: Sequence[Device] | None,
         required_count: int,
     ) -> tuple[Device, ...]:
@@ -318,8 +382,12 @@ class RoleSuiteBuilder(SuiteBuilder):
         )
 
     @staticmethod
-    def _remove_role(device: str, role: str) -> str | None:
+    def _remove_role(device: DeviceFilter, role: str) -> DeviceFilter | None:
         """Remove the role qualifier before matching a device definition."""
+        if not isinstance(device, str):
+            return {
+                key: value for key, value in device.items() if key != "role"
+            } or None
         parameters = [part.strip() for part in device.split(",")]
         parameters = [part for part in parameters if part != f"role={role}"]
         return ",".join(parameters) or None
@@ -327,19 +395,18 @@ class RoleSuiteBuilder(SuiteBuilder):
     @classmethod
     def _parse_role_devices(
         cls,
-        devices: Sequence[str],
+        devices: Sequence[DeviceFilter],
         roles: Sequence[str],
-    ) -> dict[str, tuple[str, ...]]:
+    ) -> dict[str, tuple[DeviceFilter, ...]]:
         """Route device queries to roles or broadcast one query to all roles."""
         if not devices:
             return {}
-        device_roles = {device: cls._device_roles(device, roles) for device in devices}
-        if len(devices) == 1 and not device_roles[devices[0]]:
+        device_roles = [cls._device_roles(device, roles) for device in devices]
+        if len(devices) == 1 and not device_roles[0]:
             return {role: tuple(devices) for role in roles}
 
-        role_devices: dict[str, str] = {}
-        for device in devices:
-            matching_roles = device_roles[device]
+        role_devices: dict[str, DeviceFilter] = {}
+        for device, matching_roles in zip(devices, device_roles):
             if not matching_roles:
                 raise ValueError(
                     "Role-qualified device queries cannot be mixed with unqualified "
@@ -369,10 +436,13 @@ class RoleSuiteBuilder(SuiteBuilder):
     @classmethod
     def _device_roles(
         cls,
-        device: str,
+        device: DeviceFilter,
         roles: Sequence[str],
     ) -> tuple[str, ...]:
         """Extract the explicitly qualified role from a device query."""
+        if not isinstance(device, str):
+            device_role = device.get("role")
+            return (str(device_role),) if device_role is not None else ()
         if "=" not in device:
             return ()
 
@@ -390,7 +460,7 @@ class RoleSuiteBuilder(SuiteBuilder):
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
-        devices: Sequence[str],
+        devices: Sequence[DeviceFilter],
         jobs: int,
     ) -> RoleSuiteInputs:
         """Parse and validate role selectors and optional counts."""
@@ -422,16 +492,15 @@ class RoleSuiteBuilder(SuiteBuilder):
         test_inputs: Sequence[str],
         context: TestPathContext,
     ) -> dict[str, str]:
-        """Parse and validate role-qualified test selectors.
+        """Parse role-qualified test selectors.
 
         Every input must use the role-qualified form, ``role=test_selector``.
         The parser rejects mixed qualified and unqualified inputs, malformed
-        role assignments, duplicate roles, and selectors containing patterns.
+        role assignments and duplicate roles. Whether each selector names one
+        test file is checked when the suite is built.
         """
         cls._require_role_qualified_inputs(test_inputs)
-        role_inputs = cls._parse_unique_key_values(test_inputs)
-        cls._validate_role_test_files(role_inputs, context)
-        return role_inputs
+        return cls._parse_unique_key_values(test_inputs)
 
     @staticmethod
     def _validate_role_test_files(
@@ -547,7 +616,7 @@ class StandardSuiteBuilder(SuiteBuilder):
         context: TestPathContext,
         exclude_test_selectors: Sequence[str],
         count: str | None,
-        devices: Sequence[str] = (),
+        devices: Sequence[DeviceFilter] = (),
         dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
@@ -610,7 +679,7 @@ class Suite:
         context: TestPathContext | None = None,
         exclude: Sequence[str] = (),
         count: str | None = None,
-        devices: Sequence[str] = (),
+        devices: Sequence[DeviceFilter] = (),
         dev_list: Path | None = None,
         jobs: int = 1,
         backend: Backend | None = None,
@@ -626,6 +695,34 @@ class Suite:
             devices=devices,
             dev_list=dev_list,
             jobs=jobs,
+            backend=backend,
+            observers=observers,
+        )
+
+    @classmethod
+    def from_roles(
+        cls,
+        selectors: Mapping[str, str],
+        *,
+        counts: Mapping[str, int] | None = None,
+        devices: Sequence[DeviceFilter] = (),
+        context: TestPathContext | None = None,
+        dev_list: Path | None = None,
+        backend: Backend | None = None,
+        observers: Sequence[TestReportObserver] = (),
+    ) -> Suite:
+        """Construct a role suite from separate role values.
+
+        This is the structured form of role inputs such as ``server=a.py``,
+        for callers that already hold the values apart. See
+        :meth:`RoleSuiteBuilder.from_roles`.
+        """
+        return RoleSuiteBuilder.from_roles(
+            selectors,
+            counts=counts,
+            devices=devices,
+            context=context or TestPathContext(),
+            dev_list=dev_list,
             backend=backend,
             observers=observers,
         )
