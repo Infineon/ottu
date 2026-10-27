@@ -174,7 +174,7 @@ class TestOutputOpts:
     framed_output_opts: FramedOutputOpts | None = field(
         default_factory=FramedOutputOpts
     )
-    idle_timeout: float = 20.0
+    idle_timeout: float = 60.0
 
     def target_build_args(self) -> list[str]:
         """Return the build defines for this output's framing options."""
