@@ -260,7 +260,7 @@ def test_plan_build_suites_rejects_conflicting_cli_query(tmp_path, context, dev_
         )
 
 
-def test_plan_build_suites_formats_requires_with_json_values(
+def test_plan_build_suites_matches_requires_with_list_values(
     tmp_path, context, dev_list
 ):
     (tmp_path / "check.py").touch()
@@ -269,24 +269,43 @@ def test_plan_build_suites_formats_requires_with_json_values(
             named(
                 "a",
                 tests="check.py",
+                requires={"device": [{"features": ["wifi"]}]},
+            ),
+            named(
+                "b",
+                tests="check.py",
                 requires={"device": [{"features": ["wifi", "ble"]}]},
-            )
+            ),
         ]
     )
 
-    (suite,) = plan.build_suites(plan.suites, context=context, dev_list=dev_list)
+    wifi, both = plan.build_suites(plan.suites, context=context, dev_list=dev_list)
 
-    assert suite.resolved_devices == ()
+    assert [device.name for device in wifi.resolved_devices] == ["uno"]
+    assert both.resolved_devices == ()
 
 
 @pytest.mark.parametrize("value", ["a,b", "[x]", "{x}"])
-def test_plan_build_suites_rejects_values_that_cannot_be_a_query(
+def test_plan_build_suites_accepts_any_character_in_requires_values(
     tmp_path, context, value
 ):
     (tmp_path / "check.py").touch()
     plan = Plan([named("a", tests="check.py", requires={"device": [{"name": value}]})])
 
-    with pytest.raises(ValueError, match="cannot be expressed as a query"):
+    (suite,) = plan.build_suites(plan.suites, context=context)
+
+    assert [device.name for device in suite.resolved_devices] == [value]
+
+
+def test_plan_build_suites_rejects_unsupported_requires_keys_without_a_list(
+    tmp_path, context
+):
+    (tmp_path / "check.py").touch()
+    plan = Plan(
+        [named("a", tests="check.py", requires={"device": [{"features": ["wifi"]}]})]
+    )
+
+    with pytest.raises(ValueError, match="Unsupported device parameter 'features'"):
         plan.build_suites(plan.suites, context=context)
 
 
