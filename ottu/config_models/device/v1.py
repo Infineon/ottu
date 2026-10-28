@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DeviceDefinition(BaseModel):
@@ -12,7 +12,9 @@ class DeviceDefinition(BaseModel):
 
     name: str
     uid: str
-    features: list[str | int | float | bool | None | dict[str, Any]]
+    features: list[str | int | float | bool | None | dict[str, Any]] = Field(
+        default_factory=list
+    )
     address: str | None = None
 
 
