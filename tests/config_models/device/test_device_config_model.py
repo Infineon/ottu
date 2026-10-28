@@ -42,12 +42,30 @@ def test_device_config_loads_yaml(tmp_path):
     ]
 
 
+def test_device_config_loads_yaml_without_features(tmp_path):
+    path = tmp_path / "devices.yaml"
+    path.write_text(
+        "version: 1\ndevices:\n  - name: board-1\n    uid: abc123\n",
+        encoding="utf-8",
+    )
+
+    config = DeviceConfig.from_file(path)
+
+    assert config[0].features == []
+
+
 def test_device_definition_address_defaults_to_none():
     device = DeviceDefinition.model_validate(
         {"name": "board-1", "uid": "abc123", "features": []}
     )
 
     assert device.address is None
+
+
+def test_device_definition_features_default_to_empty_list():
+    device = DeviceDefinition.model_validate({"name": "board-1", "uid": "abc123"})
+
+    assert device.features == []
 
 
 def test_device_definition_accepts_yaml_mappings():
@@ -72,7 +90,7 @@ def test_device_definition_accepts_yaml_mappings():
     ("mapping", "error_type"),
     [
         ({}, "missing"),
-        ({"version": 1, "devices": [{"name": "board", "uid": "id"}]}, "missing"),
+        ({"version": 1, "devices": [{"name": "board"}]}, "missing"),
         ({"version": 1, "devices": [], "unexpected": True}, "extra_forbidden"),
         (
             {
