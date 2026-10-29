@@ -10,7 +10,6 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from ottu.config_models.project.config import ProjectConfig
 from ottu.device import Device
 from ottu.output import TestOutput, TestResult
 from ottu.report import TestReport, TestStatus
@@ -386,58 +385,3 @@ class CliOutput:
         text = Text()
         text.append(status, style=cls._STATUS_COLORS[status])
         return text
-
-
-class TestOutputWriter:
-    """Write completed test output to per-test files."""
-
-    def __init__(self, working_dir: Path, project_root: Path | None = None) -> None:
-        """
-        Place results in the first configured test directory,
-        else the working dir.
-        """
-        roots = [working_dir.resolve()]
-        if project_root is not None and project_root.resolve() not in roots:
-            roots.append(project_root.resolve())
-        configured = ProjectConfig.from_project_root(project_root).test_dirs
-        self._test_dirs = [
-            root / test_dir
-            for root in roots
-            for test_dir in configured
-            if (root / test_dir).is_dir()
-        ]
-        base = self._test_dirs[0] if self._test_dirs else roots[0]
-        self._result_dir = base / "results"
-
-    def report_changed(self, report: TestReport) -> None:
-        """Persist the captured output when a test finishes."""
-        if report.status is not TestStatus.DONE or report.output is None:
-            return
-
-        absolute_path = report.test_path.absolute_path
-        test_dir = next(
-            (
-                test_dir
-                for test_dir in self._test_dirs
-                if absolute_path.is_relative_to(test_dir)
-            ),
-            None,
-        )
-        if test_dir is not None:
-            relative_path = absolute_path.relative_to(test_dir)
-        else:
-            relative_path = Path(report.test_path.working_dir_relative_path)
-        if relative_path.is_absolute() or ".." in relative_path.parts:
-            relative_path = report.test_path.project_root_relative_path or Path(
-                report.test_path.file_name
-            )
-        output_path = self._result_dir / relative_path.with_name(
-            f"{relative_path.name}.out"
-        )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        # Unity lines arrive without their line ending; expected-output lines keep it.
-        lines = (
-            line if line.endswith(("\n", "\r")) else f"{line}\n"
-            for line in report.output.lines
-        )
-        output_path.write_text("".join(lines), encoding="utf-8", newline="")
