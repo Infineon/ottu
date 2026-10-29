@@ -238,10 +238,12 @@ def test_report_all_sizes_columns_to_longest_report():
             ),
         ]
     )
+    assert len(widths) == 2
     text = CliOutput._report_text(
         make_report("short.py", TestResult.PASS, device="one"), widths
     ).plain
-    assert text.endswith("\t\t\t\t\t\tPASS")
+    assert text.endswith("PASS")
+    assert text == "short.py" + " " * (widths[0] - len("short.py") + 2) + "PASS"
 
 
 def test_progress_sizes_columns_to_longest_report(monkeypatch):
@@ -271,8 +273,7 @@ def test_progress_sizes_columns_to_longest_report(monkeypatch):
 
     table = progress._live.renderable
     assert table.columns[0].width == len("hello-universe.ino")
-    assert table.columns[1].width == len("infineon:psoc6:cy8ckit_062s2_ai")
-    assert table.columns[2].width == len("building") + 2
+    assert table.columns[1].width == len("building") + 2
 
 
 def test_progress_prints_final_status_without_live_spinner(capsys):
@@ -374,6 +375,27 @@ def test_progress_stop_clears_active_spinner(monkeypatch):
     assert progress._spinners == {}
 
 
+def test_progress_does_not_leave_blank_line_before_separator():
+    output = StringIO()
+    console = Console(
+        file=output,
+        width=80,
+        force_terminal=True,
+        color_system="standard",
+    )
+    progress = CliOutput(console=console)
+    test_path = make_test("check.py").test_path
+
+    progress.begin_suite("smoke", (), (test_path,))
+    progress.update(test_path, "building")
+    progress.update(test_path, "done", result="PASS")
+    progress.finish()
+
+    rendered = output.getvalue()
+    assert "\x1b[0m  \n\x1b[?25h- " in rendered
+    assert "\n\n" not in rendered
+
+
 def test_progress_keeps_multiple_reports_in_one_live_render(monkeypatch):
     renders = []
 
@@ -438,3 +460,101 @@ def test_progress_separates_same_test_by_device(monkeypatch):
         ("check.py", "/dev/ttyUSB0"),
         ("check.py", "/dev/ttyUSB1"),
     ]
+
+
+def test_report_devices_indexes_test_and_omits_device_from_result():
+    output = StringIO()
+    console = Console(file=output, width=160)
+    cli_output = CliOutput(console=console)
+    device = Device.from_string("name=board,uid=0123456789abcdef,address=/dev/ttyUSB0")
+    second_device = Device.from_string("name=board-2,uid=abcdef,address=/dev/ttyUSB1")
+
+    test_path = make_test("check.py", device).test_path
+    cli_output.begin_suite("smoke", (device, second_device), (test_path,))
+    cli_output.report_changed(
+        TestReport(
+            test_path,
+            TestStatus.DONE,
+            device=device,
+            output=TestOutput((), TestResult.PASS),
+            job_id="1",
+        )
+    )
+    cli_output.finish()
+
+    lines = output.getvalue().splitlines()
+    report = output.getvalue()
+    assert report.index("> suite : smoke") < report.index("> device [1]")
+    assert report.index("> device [1]") < report.index("  name    : board")
+    assert report.index("  address : /dev/ttyUSB0") < report.index("[1] check.py")
+    assert report.index("[1] check.py") < report.index("1 passed")
+    assert "> device [2]\n  name    : board-2\n  uid     : abcdef\n" in report
+    assert "  address : /dev/ttyUSB1" in report
+    device_details = [
+        line for line in lines if line.startswith(("  name", "  uid", "  address"))
+    ]
+    values = (
+        "board",
+        "0123456789abcdef",
+        "/dev/ttyUSB0",
+        "board-2",
+        "abcdef",
+        "/dev/ttyUSB1",
+    )
+    assert [line.index(":") for line in device_details] == [10] * 6
+    assert [line.index(value) for line, value in zip(device_details, values)] == [
+        12
+    ] * 6
+    separators = [
+        line
+        for line in lines
+        if line and set(line).issubset({"─", "-", " "}) and set(line) != {" "}
+    ]
+    content_lines = [line for line in lines if line and line not in separators]
+    assert separators
+    assert len({len(line) for line in separators}) == 1
+    separator_line_indices = [
+        index for index, line in enumerate(lines) if line in separators
+    ]
+    assert "-" in separators[2]
+    assert set(separators[2]).issubset({"-", " "})
+    assert "-" in separators[3]
+    assert set(separators[3]).issubset({"-", " "})
+    assert set(separators[-1]) == {"─"}
+    assert (
+        separator_line_indices[3] < lines.index("1 passed") < separator_line_indices[4]
+    )
+    assert all(len(line) <= max(map(len, content_lines)) for line in separators)
+    assert max(map(len, separators)) == max(map(len, content_lines))
+    test_result_line = next(line for line in lines if "[1] check.py" in line)
+    assert "PASS" in test_result_line
+    assert "[1] check.py [1]" not in test_result_line
+    assert "/dev/ttyUSB0" not in test_result_line
+    assert "1 passed" in report
+
+
+def test_device_output_colors_prefix_and_keys():
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, color_system="standard")
+    device = Device.from_string("name=board,uid=0123456789abcdef,address=/dev/ttyUSB0")
+
+    for line in CliOutput._device_lines(1, device):
+        console.print(line)
+
+    rendered = output.getvalue()
+    assert "\x1b[36m> device [1]\x1b[0m" in rendered
+    assert "\x1b[35mname\x1b[0m   \x1b[35m : \x1b[0mboard" in rendered
+    assert "\x1b[35muid\x1b[0m    \x1b[35m : \x1b[0m0123456789abcdef" in rendered
+    assert "\x1b[35maddress\x1b[0m\x1b[35m : \x1b[0m/dev/ttyUSB0" in rendered
+
+
+def test_spaced_separators_are_uncolored_but_continuous_separators_are_blue():
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, color_system="standard")
+    cli_output = CliOutput(console=console)
+    cli_output._separator_width = 5
+
+    cli_output._print_separator(spaced=True)
+    cli_output._print_separator()
+
+    assert output.getvalue() == "- - -\n\x1b[34m─────\x1b[0m\n"

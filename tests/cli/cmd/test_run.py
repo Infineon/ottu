@@ -51,6 +51,33 @@ def test_run_discovers_default_test_directory(project):
     assert "PASS" in result.output
 
 
+def test_run_lists_devices_before_indexed_test_results(project):
+    root, _ = project
+    test_file = root / "tests" / "check.py"
+    test_file.parent.mkdir()
+    test_file.touch()
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--working-dir",
+            str(root),
+            "run",
+            "--device",
+            "name=board-1",
+            "check.py",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.output.index("> device [1]") < result.output.index("[1] check.py")
+    test_result_line = next(
+        line for line in result.output.splitlines() if "[1] check.py" in line
+    )
+    assert "PASS" in test_result_line
+    assert "board-1" not in test_result_line
+
+
 def test_run_discovery_uses_project_directory_and_pattern(project):
     root, _ = project
     custom_dir = root / "fixtures"
@@ -546,8 +573,11 @@ def test_run_plan_runs_every_suite(plan_file):
     result = run_plan(root, path, "--device", "board-1")
 
     assert result.exit_code == 0
+    assert "suite : first" in result.output
+    assert "suite : second" in result.output
     assert "a.py" in result.output
     assert "b.py" in result.output
+    assert result.output.count("passed") == 2
 
 
 def test_run_plan_selects_suites_by_name(plan_file):
