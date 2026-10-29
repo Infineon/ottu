@@ -3,7 +3,7 @@
 from io import StringIO
 from pathlib import Path
 
-from ottu.cli.output import CliOutput, TestOutputWriter
+from ottu.cli.output import CliOutput
 from ottu.device import Device
 from ottu.output import TestOutput, TestResult
 from ottu.report import TestReport, TestStatus
@@ -75,87 +75,6 @@ def test_report_all_prints_each_report(capsys):
     assert "second.py" in output
 
 
-def test_output_writer_saves_test_output_under_relative_path(tmp_path):
-    test_path = TestPath(
-        tmp_path / "tests" / "nested" / "check.py",
-        Path("tests/nested/check.py"),
-        Path("tests/nested/check.py"),
-        "check.py",
-    )
-    report = TestReport(
-        test_path,
-        TestStatus.DONE,
-        output=TestOutput(
-            ("6 Tests 1 Failures 0 Ignored\n", "FAIL\n"), TestResult.FAIL
-        ),
-    )
-
-    (tmp_path / "tests").mkdir()
-
-    TestOutputWriter(tmp_path).report_changed(report)
-
-    assert (tmp_path / "tests" / "results" / "nested" / "check.py.out").read_text(
-        encoding="utf-8"
-    ) == "6 Tests 1 Failures 0 Ignored\nFAIL\n"
-
-
-def test_output_writer_uses_test_dirs_from_project_config(tmp_path):
-    (tmp_path / ".ottu").write_text(
-        "version: 1\ntest_dirs: [fixtures]\nbackend: debug\n", encoding="utf-8"
-    )
-    (tmp_path / "fixtures").mkdir()
-    report = TestReport(
-        TestPath(
-            tmp_path / "fixtures" / "wifi" / "ap.ino",
-            Path("fixtures/wifi/ap.ino"),
-            Path("fixtures/wifi/ap.ino"),
-            "ap.ino",
-        ),
-        TestStatus.DONE,
-        output=TestOutput(("OK\n",), TestResult.PASS),
-    )
-
-    TestOutputWriter(tmp_path, tmp_path).report_changed(report)
-
-    assert (tmp_path / "fixtures" / "results" / "wifi" / "ap.ino.out").read_text(
-        encoding="utf-8"
-    ) == "OK\n"
-
-
-def test_output_writer_uses_project_relative_path_outside_working_dir(tmp_path):
-    report = TestReport(
-        TestPath(
-            tmp_path / "project" / "tests" / "check.py",
-            Path("../project/tests/check.py"),
-            Path("tests/check.py"),
-            "check.py",
-        ),
-        TestStatus.DONE,
-        output=TestOutput(("FAIL\n",), TestResult.FAIL),
-    )
-
-    TestOutputWriter(tmp_path).report_changed(report)
-
-    assert (tmp_path / "results" / "tests" / "check.py.out").read_text(
-        encoding="utf-8"
-    ) == "FAIL\n"
-
-
-def test_output_writer_keeps_one_line_per_stripped_output_line(tmp_path):
-    test_path = TestPath(tmp_path / "check.py", Path("check.py"), None, "check.py")
-    report = TestReport(
-        test_path,
-        TestStatus.DONE,
-        output=TestOutput(("TEST(a) PASS", "kept\r\n", "OK"), TestResult.PASS),
-    )
-
-    TestOutputWriter(tmp_path).report_changed(report)
-
-    assert (tmp_path / "results" / "check.py.out").read_bytes() == (
-        b"TEST(a) PASS\nkept\r\nOK\n"
-    )
-
-
 def test_report_changed_renders_the_report(capsys):
     CliOutput().report_changed(make_report("check.py", TestResult.PASS))
 
@@ -171,45 +90,6 @@ def test_test_name_drops_the_tests_directory_prefix():
     )
 
     assert CliOutput._test_name(test_path) == "wifi/ap.ino"
-
-
-def test_output_writer_uses_test_dir_of_a_separate_project_root(tmp_path):
-    project = tmp_path / "project"
-    working_dir = project / "sub"
-    working_dir.mkdir(parents=True)
-    (project / "tests").mkdir()
-    report = TestReport(
-        TestPath(
-            project / "tests" / "check.py",
-            Path("../tests/check.py"),
-            Path("tests/check.py"),
-            "check.py",
-        ),
-        TestStatus.DONE,
-        output=TestOutput(("OK\n",), TestResult.PASS),
-    )
-
-    TestOutputWriter(working_dir, project).report_changed(report)
-
-    assert (project / "tests" / "results" / "check.py.out").read_text(
-        encoding="utf-8"
-    ) == "OK\n"
-
-
-def test_output_writer_ignores_incomplete_reports(tmp_path):
-    test_path = TestPath(tmp_path / "check.py", Path("check.py"), None, "check.py")
-    writer = TestOutputWriter(tmp_path)
-
-    writer.report_changed(
-        TestReport(
-            test_path,
-            TestStatus.EXECUTING,
-            output=TestOutput(("partial\n",), TestResult.UNVERIFIED),
-        )
-    )
-    writer.report_changed(TestReport(test_path, TestStatus.DONE))
-
-    assert not (tmp_path / "results").exists()
 
 
 def test_report_all_sizes_columns_to_longest_report():

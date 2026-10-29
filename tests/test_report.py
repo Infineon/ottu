@@ -2,11 +2,13 @@
 
 import queue
 from dataclasses import replace
+from pathlib import Path
 
 from ottu.output import TestOutput, TestResult
 from ottu.report import (
     QueueTestReportObserver,
     QueueTestReportRelay,
+    TestOutputExporter,
     TestReport,
     TestReportNotifier,
     TestStatus,
@@ -135,3 +137,194 @@ def test_queue_relay_forwards_queued_reports_to_observers():
 
     assert relay.forward() == [report]
     assert recording_observer.reports == [report]
+
+
+def test_output_exporter_saves_test_output_under_relative_path(tmp_path):
+    test_path = TestPath(
+        tmp_path / "tests" / "nested" / "check.py",
+        Path("tests/nested/check.py"),
+        Path("tests/nested/check.py"),
+        "check.py",
+    )
+    report = TestReport(
+        test_path,
+        TestStatus.DONE,
+        output=TestOutput(
+            ("6 Tests 1 Failures 0 Ignored\n", "FAIL\n"), TestResult.FAIL
+        ),
+    )
+
+    (tmp_path / "tests").mkdir()
+
+    TestOutputExporter(tmp_path).report_changed(report)
+
+    assert (tmp_path / "tests" / "results" / "nested" / "check.py.out").read_text(
+        encoding="utf-8"
+    ) == "6 Tests 1 Failures 0 Ignored\nFAIL\n"
+
+
+def test_output_exporter_uses_test_dirs_from_project_config(tmp_path):
+    (tmp_path / ".ottu").write_text(
+        "version: 1\ntest_dirs: [fixtures]\nbackend: debug\n", encoding="utf-8"
+    )
+    (tmp_path / "fixtures").mkdir()
+    report = TestReport(
+        TestPath(
+            tmp_path / "fixtures" / "wifi" / "ap.ino",
+            Path("fixtures/wifi/ap.ino"),
+            Path("fixtures/wifi/ap.ino"),
+            "ap.ino",
+        ),
+        TestStatus.DONE,
+        output=TestOutput(("OK\n",), TestResult.PASS),
+    )
+
+    TestOutputExporter(tmp_path, tmp_path).report_changed(report)
+
+    assert (tmp_path / "fixtures" / "results" / "wifi" / "ap.ino.out").read_text(
+        encoding="utf-8"
+    ) == "OK\n"
+
+
+def test_output_exporter_uses_project_relative_path_outside_working_dir(tmp_path):
+    report = TestReport(
+        TestPath(
+            tmp_path / "project" / "tests" / "check.py",
+            Path("../project/tests/check.py"),
+            Path("tests/check.py"),
+            "check.py",
+        ),
+        TestStatus.DONE,
+        output=TestOutput(("FAIL\n",), TestResult.FAIL),
+    )
+
+    TestOutputExporter(tmp_path).report_changed(report)
+
+    assert (tmp_path / "results" / "tests" / "check.py.out").read_text(
+        encoding="utf-8"
+    ) == "FAIL\n"
+
+
+def test_output_exporter_keeps_one_line_per_stripped_output_line(tmp_path):
+    test_path = TestPath(tmp_path / "check.py", Path("check.py"), None, "check.py")
+    report = TestReport(
+        test_path,
+        TestStatus.DONE,
+        output=TestOutput(("TEST(a) PASS", "kept\r\n", "OK"), TestResult.PASS),
+    )
+
+    TestOutputExporter(tmp_path).report_changed(report)
+
+    assert (tmp_path / "results" / "check.py.out").read_bytes() == (
+        b"TEST(a) PASS\nkept\r\nOK\n"
+    )
+
+
+def test_output_exporter_uses_test_dir_of_a_separate_project_root(tmp_path):
+    project = tmp_path / "project"
+    working_dir = project / "sub"
+    working_dir.mkdir(parents=True)
+    (project / "tests").mkdir()
+    report = TestReport(
+        TestPath(
+            project / "tests" / "check.py",
+            Path("../tests/check.py"),
+            Path("tests/check.py"),
+            "check.py",
+        ),
+        TestStatus.DONE,
+        output=TestOutput(("OK\n",), TestResult.PASS),
+    )
+
+    TestOutputExporter(working_dir, project).report_changed(report)
+
+    assert (project / "tests" / "results" / "check.py.out").read_text(
+        encoding="utf-8"
+    ) == "OK\n"
+
+
+def test_output_exporter_ignores_incomplete_reports(tmp_path):
+    test_path = TestPath(tmp_path / "check.py", Path("check.py"), None, "check.py")
+    exporter = TestOutputExporter(tmp_path)
+
+    exporter.report_changed(
+        TestReport(
+            test_path,
+            TestStatus.EXECUTING,
+            output=TestOutput(("partial\n",), TestResult.UNVERIFIED),
+        )
+    )
+    exporter.report_changed(TestReport(test_path, TestStatus.DONE))
+
+    assert not (tmp_path / "results").exists()
+
+
+def test_output_exporter_falls_back_to_file_name_outside_working_dir(tmp_path):
+    report = TestReport(
+        TestPath(
+            tmp_path / "elsewhere" / "check.py",
+            Path("../elsewhere/check.py"),
+            None,
+            "check.py",
+        ),
+        TestStatus.DONE,
+        output=TestOutput(("OK\n",), TestResult.PASS),
+    )
+
+    TestOutputExporter(tmp_path).report_changed(report)
+
+    assert (tmp_path / "results" / "check.py.out").read_text(encoding="utf-8") == "OK\n"
+
+
+def test_output_exporter_replaces_absolute_relative_path_with_file_name(tmp_path):
+    report = TestReport(
+        TestPath(
+            tmp_path / "elsewhere" / "check.py",
+            tmp_path / "elsewhere" / "check.py",
+            None,
+            "check.py",
+        ),
+        TestStatus.DONE,
+        output=TestOutput(("OK\n",), TestResult.PASS),
+    )
+
+    TestOutputExporter(tmp_path).report_changed(report)
+
+    assert (tmp_path / "results" / "check.py.out").is_file()
+
+
+def test_output_exporter_writes_empty_file_for_empty_output(tmp_path):
+    report = TestReport(
+        TestPath(tmp_path / "check.py", Path("check.py"), None, "check.py"),
+        TestStatus.DONE,
+        output=TestOutput((), TestResult.UNVERIFIED),
+    )
+
+    TestOutputExporter(tmp_path).report_changed(report)
+
+    assert (tmp_path / "results" / "check.py.out").read_bytes() == b""
+
+
+def test_output_exporter_places_results_in_first_configured_test_dir(tmp_path):
+    (tmp_path / ".ottu").write_text(
+        "version: 1\ntest_dirs: [fixtures, tests]\nbackend: debug\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "tests").mkdir()
+    report = TestReport(
+        TestPath(
+            tmp_path / "tests" / "check.py",
+            Path("tests/check.py"),
+            Path("tests/check.py"),
+            "check.py",
+        ),
+        TestStatus.DONE,
+        output=TestOutput(("OK\n",), TestResult.PASS),
+    )
+
+    TestOutputExporter(tmp_path, tmp_path).report_changed(report)
+
+    assert (tmp_path / "fixtures" / "results" / "check.py.out").read_text(
+        encoding="utf-8"
+    ) == "OK\n"
