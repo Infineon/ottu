@@ -8,6 +8,7 @@ from click.core import ParameterSource
 from ottu.backend import Backend
 from ottu.cli.context import CliContext
 from ottu.cli.output import CliOutput, TestOutputWriter
+from ottu.device import Device
 from ottu.plan import Plan
 from ottu.suite import Suite
 from ottu.test_path import TestPathContext
@@ -94,20 +95,33 @@ def run(
                 observers=observers,
             )
         ]
+        suite_names = ["Test run"]
     else:
         _reject_plan_incompatible_options(count, jobs)
         test_plan = Plan.from_file(plan)
+        selected_suites = test_plan.select(tests, exclude)
         suites = test_plan.build_suites(
-            test_plan.select(tests, exclude),
+            selected_suites,
             context=context,
             devices=device,
             dev_list=dev_list,
             backend=backend,
             observers=observers,
         )
+        suite_names = [
+            suite.name or f"Suite {index}"
+            for index, suite in enumerate(selected_suites, start=1)
+        ]
     try:
-        for suite in suites:
+        for suite_name, suite in zip(suite_names, suites, strict=True):
+            acquired_devices = _acquire_suite_devices(suite)
+            cli_output.begin_suite(
+                suite_name,
+                acquired_devices,
+                tuple(test.test_path for test in suite.tests),
+            )
             suite.run()
+            cli_output.finish()
     finally:
         cli_output.finish()
 
@@ -119,3 +133,31 @@ def _reject_plan_incompatible_options(count: str | None, jobs: int) -> None:
     jobs_source = click.get_current_context().get_parameter_source("jobs")
     if jobs_source is ParameterSource.COMMANDLINE:
         raise click.UsageError("--jobs cannot be used with --plan.")
+
+
+def _acquire_suite_devices(suite: Suite) -> tuple[Device, ...]:
+    """Acquire each selected device once and assign the acquired values."""
+    devices = tuple(suite.resolved_devices) or tuple(
+        test.device for test in suite.tests if test.device is not None
+    )
+    acquired_by_identity: dict[tuple[str | None, str | None, str | None], Device] = {}
+    acquired_devices: list[Device] = []
+    for device in devices:
+        identity = _device_identity(device)
+        if identity not in acquired_by_identity:
+            acquired = device.acquire()
+            acquired_by_identity[identity] = acquired
+            acquired_devices.append(acquired)
+
+    for test in suite.tests:
+        if test.device is not None:
+            test.device = acquired_by_identity[_device_identity(test.device)]
+
+    suite.resolved_devices = tuple(acquired_devices)
+    return tuple(acquired_devices)
+
+
+def _device_identity(
+    device: Device,
+) -> tuple[str | None, str | None, str | None]:
+    return device.name, device.get("uid"), device.get("address")
