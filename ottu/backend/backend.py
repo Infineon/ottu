@@ -12,8 +12,8 @@ from typing import Any, ClassVar
 
 import yaml
 
-from ottu.backend_builtins import BACKEND_BUILTINS
-from ottu.config_models.project.config import ProjectConfig
+from ottu.backend.builtins import BACKEND_BUILTINS
+from ottu.config import ProjectConfig
 from ottu.device import Device
 from ottu.report import TestReport, TestReportNotifier, TestStatus
 from ottu.test_path import TestPath
