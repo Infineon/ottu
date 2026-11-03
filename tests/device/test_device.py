@@ -1,12 +1,18 @@
 """Device parameter parsing tests."""
 
 import pytest
-from ottu.device import Device, DeviceAccessSerial
+from ottu.device import (
+    Device,
+    DeviceAccessSerial,
+    DeviceInput,
+)
 
 
-def test_parse_device_parses_name():
+def test_device_from_input_resolves_name():
     """Named device identity is exposed to backend placeholders."""
-    assert Device.from_string("name=board-1").backend_variables() == {
+    device = Device.from_input(DeviceInput(name="board-1"))
+
+    assert device.backend_variables() == {
         "name": "board-1",
         "device": "board-1",
     }
@@ -23,14 +29,16 @@ def test_parse_device_passes_uid_to_access(monkeypatch):
             )()
         ],
     )
-    device = Device.from_string("name=board-1,uid=abc123,address=/dev/ttyUSB0")
+    device = Device.from_input(
+        DeviceInput(name="board-1", uid="abc123", address="/dev/ttyUSB0")
+    )
 
     assert device.access == DeviceAccessSerial(address="/dev/ttyUSB0", uid="abc123")
 
 
 def test_parse_device_resolves_address_without_storing_parameters():
     """Transport address is owned by the access object, not Device.parameters."""
-    device = Device.from_string("name=board-1,address=/dev/ttyUSB0")
+    device = Device.from_input(DeviceInput(name="board-1", address="/dev/ttyUSB0"))
 
     assert device.name == "board-1"
     assert device.access == DeviceAccessSerial(address="/dev/ttyUSB0")
@@ -41,12 +49,12 @@ def test_parse_device_rejects_address_uid_mismatch(monkeypatch):
     monkeypatch.setattr("ottu.device.comports", lambda: [])
 
     with pytest.raises(ValueError, match="does not match UID"):
-        Device.from_string("address=/dev/ttyUSB0,uid=abc123").acquire()
+        Device.from_input(DeviceInput(address="/dev/ttyUSB0", uid="abc123")).acquire()
 
 
-def test_parse_device_parses_bare_device_as_name():
+def test_device_from_input_resolves_identifier_as_name():
     """A bare device identifier supplies name and device aliases."""
-    device = Device.from_string("board-1")
+    device = Device.from_input(DeviceInput(identifier="board-1"))
 
     assert device.backend_variables() == {
         "name": "board-1",
@@ -55,7 +63,9 @@ def test_parse_device_parses_bare_device_as_name():
 
 
 def test_device_identity_filters_include_non_null_identity_values():
-    device = Device.from_string("name=board-1,uid=abc123,address=/dev/ttyUSB0")
+    device = Device.from_input(
+        DeviceInput(name="board-1", uid="abc123", address="/dev/ttyUSB0")
+    )
 
     assert device.identity_filters() == (
         {"name": "board-1"},
@@ -68,28 +78,12 @@ def test_device_identity_filters_include_non_null_identity_values():
     "port",
     ["/dev/ttyACM0", "/dev/ttyUSB1", "/dev/ttyACM*", "/dev/ttyUSB*", "COM3", "COM*"],
 )
-def test_parse_device_recognizes_bare_serial_ports(port):
-    """Supported bare serial port forms are assigned to the port parameter."""
-    device = Device.from_string(port)
+def test_device_from_input_resolves_serial_port_identifiers(port):
+    """Supported serial port identifiers are assigned to serial access."""
+    device = Device.from_input(DeviceInput(identifier=port))
 
     assert device.name is None
     assert device.access == DeviceAccessSerial(address=port)
-
-
-@pytest.mark.parametrize(
-    "device",
-    [
-        "name=",
-        "=board-1",
-        "name=one,name=two",
-        "name=board-1,invalid",
-        "name=board-1,timeout=2",
-    ],
-)
-def test_parse_device_rejects_invalid_parameters(device):
-    """Malformed and duplicate device parameters are rejected."""
-    with pytest.raises(ValueError, match="(?i)(device parameter|extra inputs)"):
-        Device.from_string(device)
 
 
 def test_load_devices_from_file_resolves_definitions(tmp_path, monkeypatch):
@@ -161,6 +155,17 @@ def test_device_connect_passes_connection_configuration_to_access():
     assert configurations == [{}]
 
 
+def test_device_acquire_preserves_access():
+    class FakeAccess:
+        def acquire(self):
+            return self
+
+    access = FakeAccess()
+    device = Device(access=access)
+
+    assert device.acquire().access is access
+
+
 def test_device_get_returns_runtime_values():
     device = Device(
         name="board-1",
@@ -204,34 +209,29 @@ def test_device_without_access_is_not_connected():
     assert Device(name="board-1").is_connected() is False
 
 
-def test_device_from_mapping_matches_the_key_value_form():
-    values = {"name": "board-1", "uid": "abc123", "address": "/dev/ttyUSB0"}
+def test_device_from_input_resolves_modeled_fields():
+    device = Device.from_input(
+        DeviceInput(
+            name="board-1",
+            uid="abc123",
+            address="/dev/ttyUSB0",
+            features=["wifi"],
+        )
+    )
 
-    device = Device.from_mapping(values)
-
-    assert device == Device.from_string("name=board-1,uid=abc123,address=/dev/ttyUSB0")
     assert device.name == "board-1"
+    assert device.access == DeviceAccessSerial(address="/dev/ttyUSB0", uid="abc123")
+    assert device.features == ["wifi"]
+    assert device.features == ["wifi"]
 
 
-def test_device_from_mapping_accepts_a_name_only():
-    assert Device.from_mapping({"name": "board-1"}) == Device(name="board-1")
+def test_device_from_input_accepts_name_only():
+    assert Device.from_input(DeviceInput(name="board-1")) == Device(name="board-1")
 
 
-def test_device_from_mapping_accepts_values_with_commas():
-    assert Device.from_mapping({"name": "board, one"}).name == "board, one"
+def test_device_from_input_does_not_parse_modeled_values():
+    assert Device.from_input(DeviceInput(name="board, one")).name == "board, one"
 
 
-def test_device_from_mapping_without_values_is_an_empty_device():
-    assert Device.from_mapping({}) == Device()
-
-
-@pytest.mark.parametrize("key", ["features", "role", "timeout"])
-def test_device_from_mapping_rejects_unsupported_parameters(key):
-    with pytest.raises(ValueError, match=f"Unsupported device parameter '{key}'"):
-        Device.from_mapping({key: "value"})
-
-
-@pytest.mark.parametrize("value", [1, None, ["a"], "", "  "])
-def test_device_from_mapping_rejects_non_string_values(value):
-    with pytest.raises(ValueError, match="'name' must be a string"):
-        Device.from_mapping({"name": value})
+def test_device_from_empty_input_is_an_empty_device():
+    assert Device.from_input(DeviceInput()) == Device()

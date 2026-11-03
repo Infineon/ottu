@@ -1,7 +1,7 @@
 """Device query tests."""
 
 import pytest
-from ottu.device import Device, DeviceAccessSerial, DeviceQuery, query
+from ottu.device import Device, DeviceAccessSerial, DeviceInput, DeviceQuery, query
 
 PORTS = [
     type("Port", (), {"device": "/dev/ttyUSB0", "serial_number": "abc123"})(),
@@ -44,127 +44,102 @@ def test_find_stops_after_limit(devices):
     assert DeviceQuery.find(devices, check_connected=False, limit=1) == [devices[0]]
 
 
-def test_find_accepts_bare_device_identity(devices):
-    assert DeviceQuery.find(devices, "uno", check_connected=False) == [
-        devices[0],
-        devices[2],
+def test_find_rejects_string_filters(devices):
+    with pytest.raises(TypeError, match="DeviceInput values"):
+        DeviceQuery.find(devices, "uno")
+
+
+def test_find_matches_device_input_identity(devices):
+    assert DeviceQuery.find(
+        devices, [DeviceInput(identifier="uno")], check_connected=False
+    ) == [devices[0], devices[2]]
+    assert DeviceQuery.find(
+        devices, [DeviceInput(identifier="abc123")], check_connected=False
+    ) == [devices[0]]
+    assert DeviceQuery.find(
+        devices, [DeviceInput(identifier="/dev/ttyUSB1")], check_connected=False
+    ) == [devices[1]]
+
+
+def test_find_combines_fields_and_identifier(devices):
+    device_input = DeviceInput(identifier="uno", features=["wifi"])
+
+    assert DeviceQuery.find(devices, [device_input], check_connected=False) == [
+        devices[0]
     ]
 
 
-def test_find_accepts_mapping_filter(devices):
-    assert DeviceQuery.find(devices, {"name": "nano"}, check_connected=False) == [
-        devices[1]
-    ]
+def test_find_returns_no_matches_when_identity_conflicts_with_fields(devices):
+    device_input = DeviceInput(identifier="uno", name="nano")
+
+    assert DeviceQuery.find(devices, [device_input], check_connected=False) == []
 
 
-def test_query_returns_uids_of_connected_devices(devices):
+def test_find_matches_any_input_in_device_order(devices):
+    filters = [DeviceInput(name="uno"), DeviceInput(identifier="nano")]
+
+    assert DeviceQuery.find(devices, filters, check_connected=False) == devices
+
+
+def test_find_rejects_mapping_filters(devices):
+    with pytest.raises(TypeError, match="Device queries require DeviceInput values"):
+        DeviceQuery.find(devices, {"name": "nano"})
+
+
+def test_query_returns_values_for_connected_devices(devices):
     assert query(devices, "uid") == ["abc123", "def456"]
-
-
-def test_query_resolves_connected_addresses(devices):
     assert query(devices, "address") == ["/dev/ttyUSB0", "/dev/ttyUSB1"]
 
 
-def test_query_filters_by_value(devices):
-    assert query(devices, "uid", [{"name": "uno"}]) == ["abc123"]
+def test_query_filters_by_device_input(devices):
+    assert query(devices, "uid", [DeviceInput(name="uno")]) == ["abc123"]
 
 
-def test_query_requires_all_keys_in_one_filter(devices):
-    filters = [{"name": "uno", "uid": "def456"}]
+def test_query_requires_all_fields_in_one_input(devices):
+    device_input = DeviceInput(name="uno", uid="def456")
 
-    assert query(devices, "uid", filters) == []
+    assert query(devices, "uid", [device_input]) == []
 
 
-def test_query_matches_any_filter(devices):
-    filters = [{"name": "uno"}, {"name": "nano"}]
+def test_query_matches_any_input(devices):
+    filters = [DeviceInput(name="uno"), DeviceInput(name="nano")]
 
     assert query(devices, "name", filters) == ["uno", "nano"]
 
 
-def test_query_accepts_key_value_string_filters(devices):
-    assert query(devices, "uid", ["name=uno"]) == ["abc123"]
-    assert query(devices, "name", ["name=uno", "name=nano"]) == ["uno", "nano"]
-
-
-def test_query_accepts_mixed_string_and_dict_filters(devices):
-    assert query(devices, "name", ["name=nano", {"uid": "abc123"}]) == [
-        "uno",
-        "nano",
-    ]
-
-
-def test_query_string_filter_supports_comma_separated_values(devices):
-    assert query(devices, "uid", [" name = nano "]) == ["def456"]
-    assert query(devices, "uid", ["name=uno,uid=abc123"]) == ["abc123"]
-
-
-@pytest.mark.parametrize("text", ["name", "name=", "=uno", "", "="])
-def test_query_rejects_malformed_string_filters(devices, text):
-    with pytest.raises(ValueError, match="key=value format"):
-        query(devices, "uid", [text])
-
-
-def test_query_rejects_duplicate_filter_keys(devices):
-    with pytest.raises(ValueError, match="provided more than once"):
-        query(devices, "uid", ['name=uno,name="uno"'])
-
-
-def test_query_splits_escaped_quotes_in_filter_values():
-    assert DeviceQuery._split_filter_parts('name="uno\\"x",uid=abc123') == [
-        'name="uno\\"x"',
-        "uid=abc123",
-    ]
-
-
 def test_query_filters_by_known_address(devices):
-    assert query(devices, "uid", [{"address": "/dev/ttyUSB1"}]) == ["def456"]
+    assert query(devices, "uid", [DeviceInput(address="/dev/ttyUSB1")]) == ["def456"]
 
 
 def test_query_filters_by_feature_containment(devices):
-    assert query(devices, "uid", [{"features": "wifi"}]) == ["abc123"]
-    assert query(devices, "uid", [{"features": {"family": "xmc"}}]) == ["abc123"]
-    assert query(devices, "uid", [{"features": {"family": "other"}}]) == []
+    assert query(devices, "uid", [DeviceInput(features=["wifi"])]) == ["abc123"]
+    assert query(devices, "uid", [DeviceInput(features=[{"family": "xmc"}])]) == [
+        "abc123"
+    ]
+    assert query(devices, "uid", [DeviceInput(features=[{"family": "other"}])]) == []
 
 
 def test_query_matches_dict_feature_by_subset(devices):
-    assert query(devices, "uid", [{"features": {"family": "xmc"}}]) == ["abc123"]
-    assert query(devices, "uid", [{"features": {}}]) == ["abc123"]
-    assert query(devices, "uid", [{"features": {"missing": "xmc"}}]) == []
+    assert query(devices, "uid", [DeviceInput(features=[{"family": "xmc"}])]) == [
+        "abc123"
+    ]
+    assert query(devices, "uid", [DeviceInput(features=[{}])]) == ["abc123"]
+    assert query(devices, "uid", [DeviceInput(features=[{"missing": "xmc"}])]) == []
 
 
 def test_query_does_not_match_dict_feature_against_scalar(devices):
-    assert query(devices, "uid", [{"features": "xmc"}]) == []
-
-
-def test_query_reads_json_object_in_string_filter(devices):
-    assert query(devices, "uid", ['features={"family": "xmc"}']) == ["abc123"]
-    assert query(devices, "uid", ['features={"family": "other"}']) == []
-
-
-def test_query_reads_json_list_in_string_filter(devices):
-    assert query(devices, "uid", ['features=["wifi", {"family": "xmc"}]']) == ["abc123"]
-    assert query(devices, "uid", ['features=["wifi", "ble"]']) == []
-
-
-def test_query_keeps_non_json_values_as_strings(devices):
-    assert query(devices, "uid", ["name=uno"]) == ["abc123"]
-    assert query(devices, "uid", ["uid=123"]) == []
-
-
-def test_query_rejects_invalid_json_in_string_filter(devices):
-    with pytest.raises(ValueError, match="invalid JSON"):
-        query(devices, "uid", ["features={family"])
+    assert query(devices, "uid", [DeviceInput(features=["xmc"])]) == []
 
 
 def test_query_requires_every_listed_feature(devices):
-    assert query(devices, "uid", [{"features": ["wifi", {"family": "xmc"}]}]) == [
-        "abc123"
-    ]
-    assert query(devices, "uid", [{"features": ["wifi", "ble"]}]) == []
+    assert query(
+        devices, "uid", [DeviceInput(features=["wifi", {"family": "xmc"}])]
+    ) == ["abc123"]
+    assert query(devices, "uid", [DeviceInput(features=["wifi", "ble"])]) == []
 
 
 def test_query_returns_features_per_device(devices):
-    assert query(devices, "features", [{"name": "nano"}]) == [["ble"]]
+    assert query(devices, "features", [DeviceInput(name="nano")]) == [["ble"]]
 
 
 def test_query_skips_devices_without_a_value():
@@ -212,7 +187,7 @@ def test_query_without_connection_check_uses_definitions(monkeypatch, devices):
     assert query(
         [*devices, virtual],
         "name",
-        [{"features": "wifi"}],
+        [DeviceInput(features=["wifi"])],
         check_connected=False,
     ) == ["uno", "virtual"]
 
@@ -229,82 +204,6 @@ def test_query_without_connection_check_resolves_known_address(devices):
     ]
 
 
-@pytest.mark.parametrize(
-    ("key", "filters"),
-    [("bogus", ()), ("uid", [{"bogus": 1}])],
-)
-def test_query_rejects_unknown_keys(devices, key, filters):
+def test_query_rejects_unknown_key(devices):
     with pytest.raises(ValueError, match="Unsupported device key"):
-        query(devices, key, filters)
-
-
-def test_parse_without_a_query_has_no_filters():
-    assert DeviceQuery.parse(None) == []
-
-
-def test_parse_reads_key_value_strings():
-    assert DeviceQuery.parse("name=uno,uid=abc123") == [
-        {"name": "uno", "uid": "abc123"}
-    ]
-
-
-def test_parse_reads_json_values():
-    assert DeviceQuery.parse('features=["wifi", "ble"]') == [
-        {"features": ["wifi", "ble"]}
-    ]
-
-
-def test_parse_expands_a_bare_name_to_identity_filters():
-    assert DeviceQuery.parse("uno") == [{"name": "uno"}]
-
-
-def test_parse_expands_a_bare_address_to_identity_filters():
-    assert DeviceQuery.parse("/dev/ttyUSB0") == [{"address": "/dev/ttyUSB0"}]
-
-
-def test_parse_keeps_a_mapping():
-    assert DeviceQuery.parse({"name": "uno"}) == [{"name": "uno"}]
-
-
-def test_parse_keeps_each_filter_of_a_sequence_as_an_alternative():
-    assert DeviceQuery.parse([{"name": "uno"}, "name=nano"]) == [
-        {"name": "uno"},
-        {"name": "nano"},
-    ]
-
-
-def test_parse_does_not_validate_keys():
-    assert DeviceQuery.parse("role=server") == [{"role": "server"}]
-
-
-def test_parse_rejects_malformed_key_value_strings():
-    with pytest.raises(ValueError, match="key=value"):
-        DeviceQuery.parse("name=uno,oops")
-
-
-def test_combine_merges_filters_with_different_keys():
-    assert DeviceQuery.combine({"name": "uno"}, {"uid": "abc123"}) == {
-        "name": "uno",
-        "uid": "abc123",
-    }
-
-
-def test_combine_accepts_a_shared_key_with_the_same_value():
-    assert DeviceQuery.combine({"name": "uno"}, {"name": "uno", "uid": "abc"}) == {
-        "name": "uno",
-        "uid": "abc",
-    }
-
-
-def test_combine_rejects_contradicting_filters():
-    assert DeviceQuery.combine({"name": "uno"}, {"name": "nano"}) is None
-
-
-def test_combine_does_not_change_its_arguments():
-    first = {"name": "uno"}
-    second = {"uid": "abc"}
-
-    DeviceQuery.combine(first, second)
-
-    assert first == {"name": "uno"}
-    assert second == {"uid": "abc"}
+        query(devices, "bogus")
