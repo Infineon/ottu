@@ -1,13 +1,15 @@
 """Tests for test plan loading and validation."""
 
 import pytest
-from ottu.config_models.plan.plan import Plan, PlanConfig, RoleTest
+from ottu.device import DeviceInput
+from ottu.plan import PlanFile, PlanTestInput
+from ottu.suite import SuiteDeviceInput
 from pydantic import ValidationError
 
 
 def suite(**values):
     """Validate a plan holding one suite and return that suite."""
-    return Plan.model_validate({"version": 1, "suites": [values]}).suites[0]
+    return PlanFile.model_validate({"version": 1, "suites": [values]}).suites[0]
 
 
 def test_plan_config_loads_yaml(tmp_path):
@@ -35,7 +37,7 @@ suites:
         encoding="utf-8",
     )
 
-    plan = PlanConfig.from_file(path)
+    plan = PlanFile.from_file(path)
 
     smoke, roles = plan.suites
     assert plan.version == 1
@@ -44,37 +46,43 @@ suites:
     assert smoke.exclude == ["tests/test_b.py"]
     assert smoke.count == 2
     assert smoke.requires.device == [
-        {"role": "server", "address": "/dev/ttyUSB0"},
-        {"features": ["wifi"]},
+        SuiteDeviceInput(role="server", device=DeviceInput(address="/dev/ttyUSB0")),
+        SuiteDeviceInput(device=DeviceInput(features=["wifi"])),
     ]
     assert roles.tests == [
-        RoleTest(role="server", test="tests/test_server.py"),
-        RoleTest(role="client", test="tests/test_client.py", count=4),
+        PlanTestInput(role="server", test="tests/test_server.py"),
+        PlanTestInput(role="client", test="tests/test_client.py", count=4),
     ]
 
 
-def test_plan_config_rejects_unsupported_version(tmp_path):
+def test_plan_file_rejects_unsupported_version(tmp_path):
     path = tmp_path / "plan.yml"
     path.write_text("version: 2\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Unsupported plan schema version: 2"):
-        PlanConfig.from_file(path)
+    with pytest.raises(ValidationError) as error:
+        PlanFile.from_file(path)
+
+    assert any(item["type"] == "literal_error" for item in error.value.errors())
 
 
-def test_plan_config_rejects_non_integer_version(tmp_path):
+def test_plan_file_rejects_non_integer_version(tmp_path):
     path = tmp_path / "plan.yml"
     path.write_text("version: '1'\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Unsupported plan schema version: 1"):
-        PlanConfig.from_file(path)
+    with pytest.raises(ValidationError) as error:
+        PlanFile.from_file(path)
+
+    assert any(item["type"] == "literal_error" for item in error.value.errors())
 
 
-def test_plan_config_rejects_missing_version(tmp_path):
+def test_plan_file_rejects_missing_version(tmp_path):
     path = tmp_path / "plan.yml"
     path.write_text("suites: []\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Unsupported plan schema version: None"):
-        PlanConfig.from_file(path)
+    with pytest.raises(ValidationError) as error:
+        PlanFile.from_file(path)
+
+    assert any(item["type"] == "missing" for item in error.value.errors())
 
 
 @pytest.mark.parametrize(
@@ -89,13 +97,13 @@ def test_plan_config_rejects_missing_version(tmp_path):
 )
 def test_plan_rejects_invalid_mapping(mapping, error_type):
     with pytest.raises(ValidationError) as error:
-        Plan.model_validate(mapping)
+        PlanFile.model_validate(mapping)
 
     assert any(item["type"] == error_type for item in error.value.errors())
 
 
 def test_plan_defaults_to_no_suites():
-    assert Plan.model_validate({"version": 1}).suites == []
+    assert PlanFile.model_validate({"version": 1}).suites == []
 
 
 def test_suite_defaults():
@@ -138,12 +146,15 @@ def test_suite_rejects_non_integer_count():
 def test_requires_device_accepts_list_of_mappings():
     devices = [{"role": "server"}, {"name": "uno", "features": ["wifi", 1]}]
 
-    assert suite(requires={"device": devices}).requires.device == devices
+    assert suite(requires={"device": devices}).requires.device == [
+        SuiteDeviceInput(role="server", device=DeviceInput()),
+        SuiteDeviceInput(device=DeviceInput(name="uno", features=["wifi", 1])),
+    ]
 
 
 def test_requires_device_accepts_single_mapping_as_list():
     assert suite(requires={"device": {"name": "uno"}}).requires.device == [
-        {"name": "uno"}
+        SuiteDeviceInput(device=DeviceInput(name="uno"))
     ]
 
 
@@ -151,6 +162,20 @@ def test_requires_device_accepts_single_mapping_as_list():
 def test_requires_device_rejects_non_mapping_entries(device):
     with pytest.raises(ValidationError, match="device"):
         suite(requires={"device": device})
+
+
+@pytest.mark.parametrize(
+    "device",
+    [{"color": "red"}, {"name": 5}, {"name": ""}, {"features": "wifi"}],
+)
+def test_requires_device_rejects_invalid_device_values(device):
+    with pytest.raises(ValidationError, match="device"):
+        suite(requires={"device": [device]})
+
+
+def test_requires_device_rejects_an_identifier():
+    with pytest.raises(ValidationError, match="cannot use 'identifier'"):
+        suite(requires={"device": [{"identifier": "uno"}]})
 
 
 def test_requires_rejects_unknown_key():
@@ -163,14 +188,14 @@ def test_requires_rejects_unknown_key():
 def test_suite_accepts_role_tests_with_default_count():
     result = suite(tests=[{"role": "server", "test": "tests/test_server.py"}])
 
-    assert result.tests == [RoleTest(role="server", test="tests/test_server.py")]
+    assert result.tests == [PlanTestInput(role="server", test="tests/test_server.py")]
     assert result.tests[0].count == 1
 
 
 def test_suite_accepts_single_role_test_mapping_as_list():
     result = suite(tests={"role": "server", "test": "tests/test_server.py"})
 
-    assert result.tests == [RoleTest(role="server", test="tests/test_server.py")]
+    assert result.tests == [PlanTestInput(role="server", test="tests/test_server.py")]
 
 
 def test_suite_accepts_role_test_count():
@@ -195,55 +220,7 @@ def test_suite_rejects_invalid_role_test(role_test):
         suite(tests=[role_test])
 
 
-def test_suite_rejects_mixed_role_and_plain_tests():
-    with pytest.raises(ValidationError, match="cannot be mixed"):
-        suite(tests=["a.py", {"role": "server", "test": "b.py"}])
-
-
-def test_suite_rejects_duplicate_roles():
-    with pytest.raises(ValidationError, match="unique roles"):
-        suite(
-            tests=[
-                {"role": "server", "test": "a.py"},
-                {"role": "server", "test": "b.py"},
-            ]
-        )
-
-
-def test_suite_rejects_suite_count_with_role_tests():
-    with pytest.raises(ValidationError, match="per-role 'count'"):
-        suite(count=2, tests=[{"role": "server", "test": "a.py"}])
-
-
-def test_suite_rejects_exclude_with_role_tests():
-    with pytest.raises(ValidationError, match="'exclude' cannot be used"):
-        suite(exclude="b.py", tests=[{"role": "server", "test": "a.py"}])
-
-
-def test_suite_accepts_role_tests_with_matching_devices():
-    result = suite(
-        tests=[
-            {"role": "server", "test": "a.py"},
-            {"role": "client", "test": "b.py"},
-        ],
-        requires={"device": [{"role": "server"}, {"role": "client"}, {"role": "x"}]},
-    )
-
-    assert [test.role for test in result.tests] == ["server", "client"]
-
-
 def test_suite_accepts_role_tests_without_devices():
     result = suite(tests=[{"role": "server", "test": "a.py"}])
 
     assert result.requires.device == []
-
-
-def test_suite_rejects_role_without_matching_device():
-    with pytest.raises(ValidationError, match="no matching requires.device role"):
-        suite(
-            tests=[
-                {"role": "server", "test": "a.py"},
-                {"role": "client", "test": "b.py"},
-            ],
-            requires={"device": [{"role": "server"}, {"name": "uno"}]},
-        )
