@@ -1,34 +1,156 @@
-"""Select and build the suites of a test plan."""
+"""Load a test plan file, and select and build the suites of a test plan."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
+from dataclasses import replace
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
+
+import yaml
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+)
 
 from ottu.backend import Backend
-from ottu.config_models.plan.plan import PlanConfig, RoleTest, SuiteDefinition
-from ottu.device import DeviceFilter, DeviceQuery
 from ottu.report import TestReportObserver
-from ottu.suite import Suite
-from ottu.test_path import TestPathContext
+from ottu.suite import (
+    RoleCount,
+    Suite,
+    SuiteBuilder,
+    SuiteCount,
+    SuiteDeviceInput,
+    SuiteInput,
+)
+from ottu.test_path import TestPathContext, TestPathInput
+
+
+def _as_list(value: Any) -> Any:
+    """Accept a single string or mapping as a one-element list."""
+    return [value] if isinstance(value, (str, dict)) else value
+
+
+class PlanTestInput(BaseModel):
+    """A test assigned to one device role."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    role: str = Field(min_length=1)
+    test: str = Field(min_length=1)
+    count: int = Field(default=1, ge=1)
+
+
+StringList = Annotated[list[str], BeforeValidator(_as_list)]
+TestList = Annotated[list[str | PlanTestInput], BeforeValidator(_as_list)]
+DeviceInputList = Annotated[list[SuiteDeviceInput], BeforeValidator(_as_list)]
+
+
+class PlanSuiteRequires(BaseModel):
+    """Requirements a suite needs in order to run."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    device: DeviceInputList = Field(default_factory=list)
+
+    @field_validator("device")
+    @classmethod
+    def _reject_identifiers(
+        cls, devices: list[SuiteDeviceInput]
+    ) -> list[SuiteDeviceInput]:
+        """Require every device to be described by its fields."""
+        if any(device.device.identifier is not None for device in devices):
+            raise ValueError("A required device cannot use 'identifier'.")
+        return devices
+
+
+class PlanSuiteInput(BaseModel):
+    """A suite entry from a test plan file."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    name: str | None = None
+    tests: TestList = Field(default_factory=list)
+    exclude: StringList = Field(default_factory=list)
+    count: int | None = Field(default=None, ge=1)
+    requires: PlanSuiteRequires = Field(default_factory=PlanSuiteRequires)
+
+
+class PlanFile(BaseModel):
+    """The validated contents of a test plan file."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    version: Literal[1]
+    suites: list[PlanSuiteInput] = Field(default_factory=list)
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> "PlanFile":
+        """Load and validate a test plan file."""
+        with Path(path).open(encoding="utf-8") as plan_file:
+            return cls.model_validate(yaml.safe_load(plan_file))
 
 
 class Plan:
     """A loaded test plan whose suites can be selected and built."""
 
-    def __init__(self, suites: Sequence[SuiteDefinition]) -> None:
+    def __init__(self, suites: Sequence[PlanSuiteInput]) -> None:
         self.suites = tuple(suites)
 
     @classmethod
     def from_file(cls, path: str | Path) -> "Plan":
         """Load and validate a plan file."""
-        return cls(PlanConfig.from_file(path).suites)
+        return cls(PlanFile.from_file(path).suites)
 
-    def select(
+    def build_suites(
+        self,
+        context: TestPathContext,
+        tests: Sequence[str] = (),
+        exclude: Sequence[str] = (),
+        count: SuiteCount | None = None,
+        device_inputs: Sequence[SuiteDeviceInput] = (),
+        dev_list: Path | None = None,
+        jobs: int = 1,
+        backend: Backend | None = None,
+        observers: Sequence[TestReportObserver] = (),
+    ) -> list[Suite]:
+        """Build one suite for each suite of the plan that the selection keeps.
+
+        ``tests`` and ``exclude`` are glob patterns that select suites by name.
+        The command overrides the plan. ``device_inputs``, when given, replace
+        the ``requires.device`` of every suite. ``count`` replaces the counts
+        of a suite when one has no role; role counts replace only the
+        counts of those roles. ``jobs`` is given to every suite.
+        """
+        suites = []
+        for index, plan_suite in enumerate(self._select(tests, exclude), start=1):
+            suite_input = self._suite_input(plan_suite)
+            suites.append(
+                SuiteBuilder.build(
+                    context,
+                    replace(
+                        suite_input,
+                        count_input=self._override_count(
+                            suite_input.count_input, count
+                        ),
+                        device_inputs=tuple(device_inputs) or suite_input.device_inputs,
+                    ),
+                    dev_list,
+                    jobs,
+                    backend=backend,
+                    observers=observers,
+                    name=plan_suite.name or f"Suite {index}",
+                )
+            )
+        return suites
+
+    def _select(
         self,
         selectors: Sequence[str] = (),
         exclude: Sequence[str] = (),
-    ) -> list[SuiteDefinition]:
+    ) -> list[PlanSuiteInput]:
         """Return the suites whose names match the selectors, in plan order.
 
         Selectors and exclusions are glob patterns matched against suite
@@ -45,107 +167,67 @@ class Plan:
             and not self._matches(suite, exclude)
         ]
 
-    def build_suites(
-        self,
-        selected: Sequence[SuiteDefinition],
-        *,
-        context: TestPathContext,
-        devices: Sequence[str] = (),
-        dev_list: Path | None = None,
-        backend: Backend | None = None,
-        observers: Sequence[TestReportObserver] = (),
-    ) -> list[Suite]:
-        """Build one executable suite for every selected plan suite.
+    @staticmethod
+    def _override_count(
+        plan_count: SuiteCount | None,
+        command_count: SuiteCount | None,
+    ) -> SuiteCount | None:
+        """Return the plan count after applying the command count."""
+        if command_count is None:
+            return plan_count
+        if isinstance(command_count, int):
+            return command_count
+        if isinstance(plan_count, int):
+            raise ValueError("Role counts cannot mix integer and role=count values.")
+        if plan_count is None:
+            return command_count
 
-        ``devices`` are the ``--device`` values. With a device list they are
-        queries combined (AND) with the suite's ``requires.device``; without
-        one they are the devices to run on, as given.
-        """
-        return [
-            self._build_suite(
-                suite,
-                context=context,
-                devices=devices,
-                dev_list=dev_list,
-                backend=backend,
-                observers=observers,
-            )
-            for suite in selected
-        ]
-
-    @classmethod
-    def _build_suite(
-        cls,
-        suite: SuiteDefinition,
-        *,
-        context: TestPathContext,
-        devices: Sequence[str],
-        dev_list: Path | None,
-        backend: Backend | None,
-        observers: Sequence[TestReportObserver],
-    ) -> Suite:
-        """Translate one plan suite into an executable suite."""
-        device_filters = cls._device_filters(suite.requires.device, devices, dev_list)
-        role_tests = [test for test in suite.tests if isinstance(test, RoleTest)]
-        if role_tests:
-            return Suite.from_roles(
-                {test.role: test.test for test in role_tests},
-                counts={test.role: test.count for test in role_tests},
-                devices=device_filters,
-                context=context,
-                dev_list=dev_list,
-                backend=backend,
-                observers=observers,
-            )
-        return Suite.from_inputs(
-            [test for test in suite.tests if isinstance(test, str)],
-            context=context,
-            exclude=suite.exclude,
-            count=str(suite.count) if suite.count is not None else None,
-            devices=device_filters,
-            dev_list=dev_list,
-            backend=backend,
-            observers=observers,
+        command_roles = {role_count.role for role_count in command_count}
+        return (
+            *(
+                role_count
+                for role_count in plan_count
+                if role_count.role not in command_roles
+            ),
+            *command_count,
         )
 
     @staticmethod
-    def _matches(suite: SuiteDefinition, patterns: Sequence[str]) -> bool:
+    def _suite_input(plan_suite: PlanSuiteInput) -> SuiteInput:
+        """Convert a suite of the plan into the typed input of a suite."""
+        test_inputs = []
+        role_counts = []
+        for test in plan_suite.tests:
+            if isinstance(test, PlanTestInput):
+                test_inputs.append(
+                    TestPathInput(role=test.role, test_selector=test.test)
+                )
+                role_counts.append(RoleCount(role=test.role, count=test.count))
+            else:
+                test_inputs.append(TestPathInput(test_selector=test))
+        if plan_suite.count is not None:
+            if role_counts:
+                raise ValueError(
+                    "Role counts cannot mix integer and role=count values."
+                )
+            count: SuiteCount | None = plan_suite.count
+        else:
+            count = tuple(role_counts) if role_counts else None
+        return SuiteInput(
+            test_inputs=tuple(test_inputs),
+            exclude_test_inputs=tuple(
+                TestPathInput(test_selector=exclude) for exclude in plan_suite.exclude
+            ),
+            count_input=count,
+            device_inputs=tuple(plan_suite.requires.device),
+        )
+
+    @staticmethod
+    def _matches(suite: PlanSuiteInput, patterns: Sequence[str]) -> bool:
         """Return whether the suite name matches any of the glob patterns."""
         return suite.name is not None and any(
             fnmatchcase(suite.name, pattern) for pattern in patterns
         )
-
-    @staticmethod
-    def _device_filters(
-        required: Sequence[Mapping[str, Any]],
-        devices: Sequence[str],
-        dev_list: Path | None,
-    ) -> list[DeviceFilter]:
-        """Return the device filters of a suite.
-
-        Without ``--device`` values these are the suite's ``requires.device``
-        entries. With a device list, every ``--device`` query is combined (AND)
-        with every entry; contradicting pairs are dropped and at least one
-        pair must remain. Without a device list, or without entries, the
-        ``--device`` values are used as given.
-        """
-        if not devices:
-            return [*required]
-        if dev_list is None or not required:
-            return [*devices]
-
-        queries = [
-            filter_ for device in devices for filter_ in DeviceQuery.parse(device)
-        ]
-        combined_filters: list[DeviceFilter] = [
-            combined
-            for entry in required
-            for query in queries
-            if (combined := DeviceQuery.combine(entry, query)) is not None
-        ]
-        if not combined_filters:
-            raise ValueError("The --device queries conflict with requires.device.")
-        return combined_filters
 
 
 __all__ = ["Plan"]
