@@ -1,8 +1,7 @@
 """Tests for project configuration loading and validation."""
 
 import pytest
-from ottu.config_models.project.config import ProjectConfig
-from ottu.config_models.project.v1 import DotOttu
+from ottu.config import ProjectConfig
 from pydantic import ValidationError
 
 
@@ -44,7 +43,7 @@ backend: arduino-cli
                 "test_exclude_patterns": [],
                 "backend": "arduino-cli",
             },
-            "literal_error",
+            "value_error",
         ),
         (
             {"version": 1, "unexpected": True},
@@ -55,7 +54,7 @@ backend: arduino-cli
 )
 def test_project_config_rejects_invalid_mapping(mapping, error_type):
     with pytest.raises(ValidationError) as error:
-        DotOttu.model_validate(mapping)
+        ProjectConfig.model_validate(mapping)
     assert any(item["type"] == error_type for item in error.value.errors())
 
 
@@ -69,11 +68,11 @@ def test_project_config_rejects_non_string_patterns():
     }
 
     with pytest.raises(ValidationError, match="test_include_patterns"):
-        DotOttu.model_validate(value)
+        ProjectConfig.model_validate(value)
 
 
 def test_project_config_defaults_test_exclude_patterns():
-    config = DotOttu.model_validate(
+    config = ProjectConfig.model_validate(
         {
             "version": 1,
             "test_dirs": ["tests"],
@@ -126,6 +125,16 @@ def test_project_config_rejects_non_integer_version(tmp_path):
 
     with pytest.raises(ValueError, match="Unsupported .ottu schema version: 1"):
         ProjectConfig.from_file(path)
+
+
+def test_project_config_rejects_an_empty_file(tmp_path):
+    path = tmp_path / ".ottu"
+    path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValidationError) as error:
+        ProjectConfig.from_file(path)
+
+    assert any(item["type"] == "model_type" for item in error.value.errors())
 
 
 def test_project_config_accepts_missing_test_directory(tmp_path):
