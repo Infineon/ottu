@@ -4,9 +4,9 @@ from io import StringIO
 from pathlib import Path
 
 from ottu.cli.output import CliOutput
-from ottu.device import Device
+from ottu.device import Device, DeviceInput
 from ottu.output import TestOutput, TestResult
-from ottu.report import TestReport, TestStatus
+from ottu.report import SuiteReport, TestReport, TestStatus
 from ottu.test import Test
 from ottu.test_path import TestPath
 from rich.console import Console
@@ -15,8 +15,6 @@ from rich.text import Text
 
 def make_test(name, device=None):
     path = Path(name)
-    if isinstance(device, str):
-        device = Device.from_string(device)
     return Test(TestPath(path, path, None, path.name), device=device)
 
 
@@ -143,11 +141,18 @@ def test_progress_sizes_columns_to_longest_report(monkeypatch):
     monkeypatch.setattr("ottu.cli.output.Live", FakeLive)
 
     progress = CliOutput()
-    progress.update(make_test("short.py", "one").test_path, "building")
+    progress.update(
+        make_test(
+            "short.py", Device.from_input(DeviceInput(identifier="one"))
+        ).test_path,
+        "building",
+    )
     progress.update(
         make_test("hello-universe.ino").test_path,
         "done",
-        device=Device.from_string("infineon:psoc6:cy8ckit_062s2_ai"),
+        device=Device.from_input(
+            DeviceInput(identifier="infineon:psoc6:cy8ckit_062s2_ai")
+        ),
         result="FAIL",
     )
 
@@ -196,7 +201,7 @@ def test_progress_keeps_spinner_across_execution_stages(monkeypatch):
 
     progress = CliOutput()
     progress.update(make_test("hello-world").test_path, "building")
-    spinner = progress._spinners[("hello-world", "", None)]
+    spinner = progress._spinners[("hello-world", "")]
     progress.update(make_test("hello-world").test_path, "flashing")
     progress.update(make_test("hello-world").test_path, "done", result="PASS")
     progress.finish()
@@ -266,7 +271,7 @@ def test_progress_does_not_leave_blank_line_before_separator():
     progress = CliOutput(console=console)
     test_path = make_test("check.py").test_path
 
-    progress.begin_suite("smoke", (), (test_path,))
+    progress.suite_started(SuiteReport("smoke", (), (test_path,)))
     progress.update(test_path, "building")
     progress.update(test_path, "done", result="PASS")
     progress.finish()
@@ -325,12 +330,12 @@ def test_progress_separates_same_test_by_device(monkeypatch):
     progress.update(
         make_test("check.py").test_path,
         "building",
-        device=Device.from_string("/dev/ttyUSB0"),
+        device=Device.from_input(DeviceInput(identifier="/dev/ttyUSB0")),
     )
     progress.update(
         make_test("check.py").test_path,
         "building",
-        device=Device.from_string("/dev/ttyUSB1"),
+        device=Device.from_input(DeviceInput(identifier="/dev/ttyUSB1")),
     )
 
     assert [
@@ -346,18 +351,23 @@ def test_report_devices_indexes_test_and_omits_device_from_result():
     output = StringIO()
     console = Console(file=output, width=160)
     cli_output = CliOutput(console=console)
-    device = Device.from_string("name=board,uid=0123456789abcdef,address=/dev/ttyUSB0")
-    second_device = Device.from_string("name=board-2,uid=abcdef,address=/dev/ttyUSB1")
+    device = Device.from_input(
+        DeviceInput(name="board", uid="0123456789abcdef", address="/dev/ttyUSB0")
+    )
+    second_device = Device.from_input(
+        DeviceInput(name="board-2", uid="abcdef", address="/dev/ttyUSB1")
+    )
 
     test_path = make_test("check.py", device).test_path
-    cli_output.begin_suite("smoke", (device, second_device), (test_path,))
+    cli_output.suite_started(
+        SuiteReport("smoke", (device, second_device), (test_path,))
+    )
     cli_output.report_changed(
         TestReport(
             test_path,
             TestStatus.DONE,
             device=device,
             output=TestOutput((), TestResult.PASS),
-            job_id="1",
         )
     )
     cli_output.finish()
@@ -416,7 +426,9 @@ def test_report_devices_indexes_test_and_omits_device_from_result():
 def test_device_output_colors_prefix_and_keys():
     output = StringIO()
     console = Console(file=output, force_terminal=True, color_system="standard")
-    device = Device.from_string("name=board,uid=0123456789abcdef,address=/dev/ttyUSB0")
+    device = Device.from_input(
+        DeviceInput(name="board", uid="0123456789abcdef", address="/dev/ttyUSB0")
+    )
 
     for line in CliOutput._device_lines(1, device):
         console.print(line)

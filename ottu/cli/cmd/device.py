@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 
 from ottu.cli.context import CliContext
+from ottu.cli.parse import parse_device_input
 from ottu.device import Device, DeviceQuery
 
 
@@ -27,7 +28,8 @@ def device() -> None:
     "-f",
     "filters",
     multiple=True,
-    help="A comma-separated key=value filter; repeat the option to match any of them.",
+    help="A device identifier or comma-separated key=value filter; "
+    "repeat to match any.",
 )
 @click.option(
     "--only-connected/--all",
@@ -46,10 +48,11 @@ def query(
     """Print KEY for the devices in a device list that match the filters."""
     path = cli_ctx.working_dir / dev_list
     devices = Device.from_file(str(path))
+    parsed_filters = [parse_device_input(value) for value in filters]
 
     try:
         values = DeviceQuery.select(
-            devices, key, filters, check_connected=only_connected
+            devices, key, parsed_filters, check_connected=only_connected
         )
     except ValueError as error:
         raise click.UsageError(str(error)) from error
