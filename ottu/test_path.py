@@ -6,7 +6,18 @@ from dataclasses import dataclass, field
 from glob import glob, has_magic
 from pathlib import Path, PureWindowsPath
 
-from ottu.config_models.project.config import ProjectConfig
+from pydantic import BaseModel, ConfigDict, Field
+
+from ottu.config import ProjectConfig
+
+
+class TestPathInput(BaseModel):
+    """A test selector, optionally assigned to one device role."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    test_selector: str = Field(min_length=1)
+    role: str | None = Field(default=None, min_length=1)
 
 
 @dataclass(frozen=True)
@@ -17,6 +28,17 @@ class TestPath:
     working_dir_relative_path: Path
     project_root_relative_path: Path | None
     file_name: str
+
+    @classmethod
+    def from_input(
+        cls, test_input: TestPathInput, context: "TestPathContext"
+    ) -> list["TestPath"]:
+        """Resolve the selector of a test input into its test paths.
+
+        A directory or a glob pattern resolves to several paths. The role of
+        the input is not used, and no exclusions are applied.
+        """
+        return TestPathResolver.resolve(test_input.test_selector, context)
 
 
 @dataclass(frozen=True)
@@ -203,6 +225,49 @@ class TestPathResolver:
         ]
 
     @staticmethod
+    def exclude(
+        test_paths: Sequence[TestPath],
+        exclude_test_paths: Sequence[TestPath],
+        context: TestPathContext,
+    ) -> list[TestPath]:
+        """Return the test paths without the excluded ones, in the same order.
+
+        A test path is excluded when it is one of the given exclude paths, or
+        when it matches one of the context's own exclude patterns. A pattern
+        that matches nothing is ignored.
+        """
+        excluded = {test_path.absolute_path for test_path in exclude_test_paths}
+        excluded.update(
+            test_path.absolute_path
+            for pattern in context.test_exclude_patterns
+            for test_path in TestPathResolver.resolve(
+                pattern, context, allow_no_matches=True
+            )
+        )
+        return [
+            test_path
+            for test_path in test_paths
+            if test_path.absolute_path not in excluded
+        ]
+
+    @staticmethod
+    def is_single_file(test_selector: str, context: TestPathContext) -> bool:
+        """Return whether a selector names one file that is not context-excluded."""
+        if has_magic(test_selector):
+            return False
+        resolved_path = TestPathResolver._find_input(test_selector, context)
+        if resolved_path is None or not resolved_path.is_file():
+            return False
+        absolute_path = resolved_path.resolve()
+        return not any(
+            test_path.absolute_path == absolute_path
+            for pattern in context.test_exclude_patterns
+            for test_path in TestPathResolver.resolve(
+                pattern, context, allow_no_matches=True
+            )
+        )
+
+    @staticmethod
     def _describe_path(test_path: Path, context: TestPathContext) -> TestPath:
         working_dir = Path(context.working_dir)
         project_root = (
@@ -222,36 +287,6 @@ class TestPathResolver:
             project_root_relative_path=project_relative,
             file_name=absolute_path.name,
         )
-
-    @staticmethod
-    def resolve_all(
-        test_selectors: Sequence[str],
-        context: TestPathContext,
-        exclude_test_selectors: Sequence[str] = (),
-    ) -> list[TestPath]:
-        """Resolve test selectors, then remove excluded test selectors."""
-        if not test_selectors:
-            resolved_tests = TestPathResolver.discover(context)
-        else:
-            resolved_tests = []
-            for test_selector in test_selectors:
-                resolved_tests.extend(TestPathResolver.resolve(test_selector, context))
-
-        exclude_selectors = (*context.test_exclude_patterns, *exclude_test_selectors)
-        excluded_paths = {
-            path.absolute_path
-            for exclude_test_selector in exclude_selectors
-            for path in TestPathResolver.resolve(
-                exclude_test_selector,
-                context,
-                allow_no_matches=True,
-            )
-        }
-        return [
-            test_path
-            for test_path in resolved_tests
-            if test_path.absolute_path not in excluded_paths
-        ]
 
     @staticmethod
     def _candidate_paths(

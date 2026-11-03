@@ -3,7 +3,46 @@
 from pathlib import Path
 
 import pytest
-from ottu.test_path import TestPath, TestPathContext, TestPathResolver
+from ottu.test_path import (
+    TestPath,
+    TestPathContext,
+    TestPathInput,
+    TestPathResolver,
+)
+
+
+def test_test_path_from_input_returns_the_paths_of_the_input(tmp_path):
+    test_file = tmp_path / "check.py"
+    test_file.touch()
+
+    result = TestPath.from_input(
+        TestPathInput(test_selector="check.py"),
+        TestPathContext(working_dir=tmp_path),
+    )
+
+    assert result == [
+        TestPath(test_file, test_file.relative_to(tmp_path), None, "check.py")
+    ]
+
+
+def test_test_path_from_input_expands_a_pattern_and_ignores_the_role(tmp_path):
+    (tmp_path / "a.py").touch()
+    (tmp_path / "b.py").touch()
+
+    result = TestPath.from_input(
+        TestPathInput(role="server", test_selector="*.py"),
+        TestPathContext(working_dir=tmp_path),
+    )
+
+    assert [path.file_name for path in result] == ["a.py", "b.py"]
+
+
+def test_test_path_from_input_rejects_an_unknown_test(tmp_path):
+    with pytest.raises(ValueError, match="does not exist"):
+        TestPath.from_input(
+            TestPathInput(test_selector="missing.py"),
+            TestPathContext(working_dir=tmp_path),
+        )
 
 
 def test_resolve_relative_path_from_working_directory(tmp_path):
@@ -142,32 +181,6 @@ def test_resolve_absolute_path(tmp_path):
     assert result[0].absolute_path == test_file
 
 
-def test_resolve_all_expands_glob(tmp_path):
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    (tests_dir / "b.py").touch()
-    (tests_dir / "a.py").touch()
-
-    result = TestPathResolver.resolve_all(
-        ["*.py"], TestPathContext(working_dir=tmp_path, test_dirs=("tests",))
-    )
-
-    assert [entry.file_name for entry in result] == ["a.py", "b.py"]
-
-
-def test_resolve_all_includes_all_files_from_glob(tmp_path):
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    (tests_dir / "check.py").touch()
-    (tests_dir / "check.py.exp").touch()
-
-    result = TestPathResolver.resolve_all(
-        ["*"], TestPathContext(working_dir=tmp_path, test_dirs=("tests",))
-    )
-
-    assert [entry.file_name for entry in result] == ["check.py", "check.py.exp"]
-
-
 def test_resolve_directory_expands_child_test_files(tmp_path):
     test_directory = tmp_path / "hello-universe"
     test_directory.mkdir()
@@ -204,104 +217,34 @@ def test_resolve_missing_path_raises(tmp_path):
         TestPathResolver.resolve("missing.py", TestPathContext(working_dir=tmp_path))
 
 
-def test_validate_and_resolve_all_combines_inputs(tmp_path):
-    """All inputs are resolved into one ordered result list."""
-    first = tmp_path / "first.py"
-    second = tmp_path / "second.py"
-    first.touch()
-    second.touch()
+def test_is_single_file_finds_files_in_test_directories(tmp_path):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "check.py").touch()
 
-    result = TestPathResolver.resolve_all(
-        [
-            "first.py",
-            "second.py",
-        ],
-        TestPathContext(working_dir=tmp_path),
+    assert TestPathResolver.is_single_file(
+        "check.py", TestPathContext(working_dir=tmp_path)
     )
 
-    assert [entry.absolute_path for entry in result] == [first, second]
+
+@pytest.mark.parametrize("selector", ["*.py", "suite", "missing.py"])
+def test_is_single_file_rejects_non_file_selectors(tmp_path, selector):
+    (tmp_path / "suite").mkdir()
+
+    assert not TestPathResolver.is_single_file(
+        selector, TestPathContext(working_dir=tmp_path)
+    )
 
 
-def test_validate_and_resolve_all_discovers_when_inputs_are_empty(tmp_path):
-    """An empty input list delegates to automatic discovery."""
-    test_file = tmp_path / "tests" / "check.py"
-    test_file.parent.mkdir()
+def test_is_single_file_rejects_a_context_excluded_file(tmp_path):
+    test_file = tmp_path / "skip_server.py"
     test_file.touch()
-
-    result = TestPathResolver.resolve_all(
-        [], TestPathContext(working_dir=tmp_path, test_include_patterns=["**/*.py"])
+    context = TestPathContext(
+        working_dir=tmp_path,
+        test_exclude_patterns=["skip_*.py"],
     )
 
-    assert [entry.absolute_path for entry in result] == [test_file]
-
-
-def test_validate_and_resolve_all_discovers_for_no_selectors(tmp_path):
-    """No selectors trigger discovery using the supplied context."""
-    test_file = tmp_path / "tests" / "check.py"
-    test_file.parent.mkdir()
-    test_file.touch()
-
-    result = TestPathResolver.resolve_all(
-        [], TestPathContext(working_dir=tmp_path, test_include_patterns=["*.py"])
-    )
-
-    assert [entry.absolute_path for entry in result] == [test_file]
-
-
-def test_validate_and_resolve_all_excludes_matching_glob(tmp_path):
-    """Exclusions can remove multiple discovered files with one glob."""
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    included = tests_dir / "keep.py"
-    excluded_first = tests_dir / "skip_first.py"
-    excluded_second = tests_dir / "skip_second.py"
-    included.touch()
-    excluded_first.touch()
-    excluded_second.touch()
-
-    result = TestPathResolver.resolve_all(
-        [],
-        TestPathContext(working_dir=tmp_path, test_include_patterns=["**/*.py"]),
-        exclude_test_selectors=("skip_*.py",),
-    )
-
-    assert [entry.absolute_path for entry in result] == [included]
-
-
-def test_validate_and_resolve_all_applies_context_exclude_patterns(tmp_path):
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    included = tests_dir / "keep.py"
-    excluded = tests_dir / "skip.py"
-    included.touch()
-    excluded.touch()
-
-    result = TestPathResolver.resolve_all(
-        [],
-        TestPathContext(
-            working_dir=tmp_path,
-            test_exclude_patterns=["skip.py"],
-        ),
-    )
-
-    assert [entry.absolute_path for entry in result] == [included]
-
-
-def test_validate_and_resolve_all_ignores_unmatched_exclude_glob(tmp_path):
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    included = tests_dir / "keep.py"
-    included.touch()
-
-    result = TestPathResolver.resolve_all(
-        [],
-        TestPathContext(
-            working_dir=tmp_path,
-            test_exclude_patterns=["*.exp"],
-        ),
-    )
-
-    assert [entry.absolute_path for entry in result] == [included]
+    assert not TestPathResolver.is_single_file("skip_server.py", context)
 
 
 def test_discover_finds_files_recursively_in_default_tests_directory(tmp_path):
@@ -391,3 +334,38 @@ def test_discover_includes_project_root_tests(tmp_path):
     )
 
     assert [entry.absolute_path for entry in result] == [test_file]
+
+
+def names(test_paths):
+    return [test_path.file_name for test_path in test_paths]
+
+
+def test_exclude_removes_the_given_paths_and_keeps_the_order(tmp_path):
+    for name in ("a.py", "b.py", "c.py"):
+        (tmp_path / name).touch()
+    context = TestPathContext(working_dir=tmp_path)
+    test_paths = TestPathResolver.resolve("*.py", context)
+    exclude = TestPathResolver.resolve("b.py", context)
+
+    result = TestPathResolver.exclude(test_paths, exclude, context)
+
+    assert names(result) == ["a.py", "c.py"]
+
+
+def test_exclude_removes_the_paths_matching_the_context_patterns(tmp_path):
+    for name in ("a.py", "skip_b.py", "skip_c.py"):
+        (tmp_path / name).touch()
+    context = TestPathContext(working_dir=tmp_path, test_exclude_patterns=["skip_*.py"])
+    test_paths = TestPathResolver.resolve("*.py", context)
+
+    result = TestPathResolver.exclude(test_paths, [], context)
+
+    assert names(result) == ["a.py"]
+
+
+def test_exclude_ignores_a_pattern_without_matches(tmp_path):
+    (tmp_path / "a.py").touch()
+    context = TestPathContext(working_dir=tmp_path, test_exclude_patterns=["none_*.py"])
+    test_paths = TestPathResolver.resolve("a.py", context)
+
+    assert TestPathResolver.exclude(test_paths, [], context) == test_paths
