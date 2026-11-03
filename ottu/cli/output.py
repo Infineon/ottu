@@ -12,7 +12,7 @@ from rich.text import Text
 
 from ottu.device import Device
 from ottu.output import TestOutput, TestResult
-from ottu.report import TestReport, TestStatus
+from ottu.report import SuiteReport, TestReport, TestStatus
 from ottu.test_path import TestPath
 
 
@@ -34,18 +34,16 @@ class CliOutput:
         self._console = console or Console(file=sys.stdout)
         self._live: Live | None = None
         self._reports: list[TestReport] = []
-        self._spinners: dict[tuple[str, str | int | None, str | None], Spinner] = {}
+        self._spinners: dict[tuple[str, str | int | None], Spinner] = {}
         self._device_indexes: dict[tuple[str | None, str | None, str | None], int] = {}
         self._suite_active = False
         self._separator_width = 0
 
-    def begin_suite(
-        self,
-        name: str,
-        devices: tuple[Device, ...],
-        test_paths: tuple[TestPath, ...],
-    ) -> None:
+    def suite_started(self, report: SuiteReport) -> None:
         """Start a suite report with its devices and fresh test results."""
+        name = report.name or "Test run"
+        devices = report.devices
+        test_paths = report.test_paths
         self._reports.clear()
         self._spinners.clear()
         self._device_indexes = {
@@ -120,14 +118,12 @@ class CliOutput:
         test_path: TestPath,
         status: str,
         device: Device | None = None,
-        job_id: str | None = None,
         result: str | None = None,
     ) -> None:
         report = TestReport(
             test_path,
             TestStatus(status),
             device=device,
-            job_id=job_id,
             output=TestOutput((), TestResult(result)) if result is not None else None,
         )
         self._update_report(report)
@@ -137,12 +133,10 @@ class CliOutput:
         name = self._test_name(report.test_path)
         device = self._device_name(report.device)
         device_index = self._device_index(report.device)
-        job_id = report.job_id
         status = self._display_status(report)
         report_key = (
             name,
             device_index if device_index is not None else device,
-            job_id,
         )
         report_index = next(
             (
@@ -155,7 +149,6 @@ class CliOutput:
                         if self._device_index(current.device) is not None
                         else self._device_name(current.device)
                     ),
-                    current.job_id,
                 )
                 == report_key
             ),
@@ -258,7 +251,6 @@ class CliOutput:
                     if self._device_index(report.device) is not None
                     else self._device_name(report.device)
                 ),
-                report.job_id,
             )
             spinner = self._spinners.get(report_key)
             status = self._status_text(self._display_status(report))

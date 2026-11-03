@@ -76,6 +76,20 @@ def test_device_query_filters_by_value(dev_list):
     assert result.output == "abc123\n"
 
 
+def test_device_query_filters_by_bare_identifier(dev_list):
+    result = invoke("uid", "--dev-list", str(dev_list), "--filter", "uno", "--all")
+
+    assert result.exit_code == 0
+    assert result.output == "abc123\naaa111\n"
+
+
+def test_device_query_rejects_role_as_unknown_device_field(dev_list):
+    result = invoke("uid", "--dev-list", str(dev_list), "--filter", "role=server")
+
+    assert result.exit_code == 2
+    assert "role" in result.output
+
+
 def test_device_query_matches_any_repeated_filter(dev_list):
     result = invoke(
         "uid", "--dev-list", str(dev_list), "-f", "name=uno", "-f", "name=nano"
@@ -169,7 +183,7 @@ def test_device_query_reports_invalid_list(tmp_path):
 
     assert result.exit_code != 0
     assert isinstance(result.exception, ValueError)
-    assert "Unsupported device schema version: 2" in str(result.exception)
+    assert "Input should be 1" in str(result.exception)
 
 
 def test_device_query_reports_malformed_yaml(tmp_path):
@@ -182,20 +196,23 @@ def test_device_query_reports_malformed_yaml(tmp_path):
     assert isinstance(result.exception, yaml.YAMLError)
 
 
-@pytest.mark.parametrize("text", ["name", "name=", "=uno"])
+@pytest.mark.parametrize("text", ["name=", "=uno"])
 def test_device_query_rejects_malformed_filters(dev_list, text):
     result = invoke("uid", "--dev-list", str(dev_list), "--filter", text)
 
     assert result.exit_code == 2
-    assert "Filters must use key=value format" in result.output
+    assert "must use key=value format" in result.output
 
 
 @pytest.mark.parametrize(
-    ("key", "args"),
-    [("bogus", []), ("uid", ["--filter", "bogus=1"])],
+    ("key", "args", "message"),
+    [
+        ("bogus", [], "Unsupported device key"),
+        ("uid", ["--filter", "bogus=1"], "Extra inputs are not permitted"),
+    ],
 )
-def test_device_query_rejects_unknown_keys(dev_list, key, args):
+def test_device_query_rejects_unknown_keys(dev_list, key, args, message):
     result = invoke(key, "--dev-list", str(dev_list), *args)
 
     assert result.exit_code == 2
-    assert "Unsupported device key" in result.output
+    assert message in result.output
