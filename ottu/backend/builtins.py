@@ -9,7 +9,7 @@ BACKEND_BUILTINS = {
         "program": "arduino-cli upload {test_path} -b {name} --port {address} ",
     },
     "debug": {
-        "build": "sh -c 'sleep 3; echo build {device} {defines}'",
-        "program": "sh -c 'sleep 3; echo program {device}'",
+        "build": "sh -c 'echo build {device} {defines}'",
+        "program": "sh -c 'echo program {device}'",
     },
 }

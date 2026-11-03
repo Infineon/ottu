@@ -5,8 +5,8 @@ import subprocess
 
 import pytest
 from ottu.backend import Backend, BackendCommandError
-from ottu.backend_builtins import BACKEND_BUILTINS
-from ottu.device import Device
+from ottu.backend.builtins import BACKEND_BUILTINS
+from ottu.device import Device, DeviceInput
 from ottu.report import TestReportNotifier, TestStatus
 from ottu.test import Test
 from ottu.test_path import TestPath
@@ -154,7 +154,7 @@ def test_debug_backend_echoes_device_commands():
 
     assert commands == [
         (
-            ("sh", "-c", "sleep 3; echo build test-device "),
+            ("sh", "-c", "echo build test-device "),
             {
                 "cwd": None,
                 "check": True,
@@ -163,7 +163,7 @@ def test_debug_backend_echoes_device_commands():
             },
         ),
         (
-            ("sh", "-c", "sleep 3; echo program test-device"),
+            ("sh", "-c", "echo program test-device"),
             {
                 "cwd": None,
                 "check": True,
@@ -183,10 +183,10 @@ def test_debug_backend_echoes_the_build_defines():
     assert commands[0] == (
         "sh",
         "-c",
-        "sleep 3; echo build test-device "
+        "echo build test-device "
         "-DOTTU_FRAMED_OUTPUT_ENABLED=1 -DOTTU_TEST_FRAME_TOKEN=abc",
     )
-    assert commands[1] == ("sh", "-c", "sleep 3; echo program test-device")
+    assert commands[1] == ("sh", "-c", "echo program test-device")
 
 
 def test_debug_backend_build_is_valid_shell_with_defines():
@@ -195,7 +195,7 @@ def test_debug_backend_build_is_valid_shell_with_defines():
     command = run_commands(backend, DEFINES, Device(name="test-device"))[0]
 
     result = subprocess.run(
-        ("sh", "-c", command[2].replace("sleep 3; ", "")),
+        ("sh", "-c", command[2]),
         capture_output=True,
         text=True,
         check=True,
@@ -337,7 +337,7 @@ def test_backend_rejects_a_non_string_define_prefix():
 def test_arduino_cli_backend_passes_defines_as_extra_flags():
     """The built-in arduino-cli build gets the defines as one build property."""
     backend = Backend.from_name("arduino-cli")
-    device = Device.from_string("name=uno,address=/dev/ttyUSB0")
+    device = Device.from_input(DeviceInput(name="uno", address="/dev/ttyUSB0"))
 
     commands = run_commands(backend, DEFINES, device)
 
@@ -529,13 +529,13 @@ def test_backend_loads_builtin():
     """A built-in backend can be selected by name."""
     backend = Backend.from_name("debug")
 
-    assert backend.build == ("sh", "-c", "sleep 3; echo build {device} {defines}")
+    assert backend.build == ("sh", "-c", "echo build {device} {defines}")
 
 
 def test_backend_loads_default_without_project_root():
     backend = Backend.load()
 
-    assert backend.build == ("sh", "-c", "sleep 3; echo build {device} {defines}")
+    assert backend.build == ("sh", "-c", "echo build {device} {defines}")
 
 
 def test_backend_loads_project_yaml(tmp_path):
