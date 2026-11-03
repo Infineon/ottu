@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum
 from multiprocessing import Process, Queue
 from pathlib import Path
 from queue import Empty
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
-from ottu.config_models.project.config import ProjectConfig
+from ottu.config import ProjectConfig
 from ottu.device import Device
 from ottu.output import TestOutput, TestResult
 from ottu.test_path import TestPath
@@ -39,7 +39,6 @@ class TestReport:
     device: Device | None = None
     output: TestOutput | None = None
     message: str | None = None
-    job_id: str | None = None
 
     @property
     def result(self) -> TestResult | None:
@@ -57,6 +56,23 @@ class TestReportObserver(Protocol):
 
     def report_changed(self, report: TestReport) -> None:
         """Handle one lifecycle report."""
+
+
+@dataclass(frozen=True)
+class SuiteReport:
+    """Description of a suite about to run, with its devices already acquired."""
+
+    name: str | None
+    devices: tuple[Device, ...]
+    test_paths: tuple[TestPath, ...]
+
+
+@runtime_checkable
+class SuiteReportObserver(Protocol):
+    """Observer notified when a suite starts, after its devices are acquired."""
+
+    def suite_started(self, report: SuiteReport) -> None:
+        """Handle the start of a suite."""
 
 
 class TestOutputExporter:
@@ -126,18 +142,31 @@ class TestReportNotifier:
             observer.report_changed(report)
 
 
+class SuiteReportNotifier:
+    """Fan a suite report out to the observers that follow suite events."""
+
+    def __init__(self, observers: Sequence[object] = ()) -> None:
+        self._observers = tuple(
+            observer
+            for observer in observers
+            if isinstance(observer, SuiteReportObserver)
+        )
+
+    def notify(self, report: SuiteReport) -> None:
+        """Hand the suite report to each interested observer in order."""
+        for observer in self._observers:
+            observer.suite_started(report)
+
+
 class QueueTestReportObserver:
     """Publish a child-process test report to a parent queue."""
 
-    def __init__(
-        self, event_queue: Queue[TestReport], job_id: str | None = None
-    ) -> None:
+    def __init__(self, event_queue: Queue[TestReport]) -> None:
         self._event_queue = event_queue
-        self._job_id = job_id
 
     def report_changed(self, report: TestReport) -> None:
         """Queue one report from a parallel test execution."""
-        self._event_queue.put(replace(report, job_id=self._job_id))
+        self._event_queue.put(report)
 
     @property
     def event_queue(self) -> Queue[TestReport]:

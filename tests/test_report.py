@@ -1,7 +1,6 @@
 """Test report tests."""
 
 import queue
-from dataclasses import replace
 from pathlib import Path
 
 from ottu.output import TestOutput, TestResult
@@ -81,8 +80,8 @@ def test_notifier_without_observers_does_nothing():
     TestReportNotifier().notify(make_report(TestStatus.DONE))
 
 
-def test_queue_observer_publishes_report_with_job_id():
-    """The child queue observer tags reports with their job id."""
+def test_queue_observer_publishes_the_report_unchanged():
+    """The child queue observer forwards reports to the parent queue."""
     queued = []
 
     class FakeQueue:
@@ -91,9 +90,9 @@ def test_queue_observer_publishes_report_with_job_id():
 
     report = make_report(TestStatus.BUILDING)
 
-    QueueTestReportObserver(FakeQueue(), "1").report_changed(report)
+    QueueTestReportObserver(FakeQueue()).report_changed(report)
 
-    assert queued == [replace(report, job_id="1")]
+    assert queued == [report]
 
 
 def test_queue_relay_tracks_registered_processes():
@@ -128,7 +127,7 @@ def test_queue_relay_forwards_queued_reports_to_observers():
             self.report = None
             return report
 
-    report = replace(make_report(TestStatus.BUILDING), job_id="1")
+    report = make_report(TestStatus.BUILDING)
     recording_observer = RecordingObserver()
     relay = QueueTestReportRelay(
         (recording_observer,),
