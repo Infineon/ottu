@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from ottu.backend import Backend
-from ottu.device import Device, DeviceAccessSerial
+from ottu.device import Device, DeviceAccessSerial, DeviceInput
 from ottu.output import (
     OutputParserType,
     TestOutput,
@@ -14,7 +14,7 @@ from ottu.output import (
 )
 from ottu.report import TestReportNotifier, TestStatus
 from ottu.test import Test, TestOpts
-from ottu.test_path import TestPath, TestPathContext
+from ottu.test_path import TestPath
 
 
 def test_test_run_requires_a_backend(tmp_path):
@@ -23,6 +23,15 @@ def test_test_run_requires_a_backend(tmp_path):
 
     with pytest.raises(ValueError, match="backend is required"):
         Test(test_path).run()
+
+
+def test_test_run_requires_a_device(tmp_path):
+    """A test cannot run before a device has been assigned to it."""
+    test_path = TestPath(tmp_path / "check.py", tmp_path / "check.py", None, "check.py")
+    backend = Backend.from_mapping({"program": "echo program"})
+
+    with pytest.raises(ValueError, match="device is required"):
+        Test(test_path, backend=backend).run()
 
 
 def test_test_run_invokes_assigned_backend(monkeypatch, tmp_path):
@@ -51,7 +60,7 @@ def test_test_run_invokes_assigned_backend(monkeypatch, tmp_path):
 
     test = Test(
         test_path,
-        device=Device.from_string("name=board-1,address=/dev/ttyUSB0"),
+        device=Device.from_input(DeviceInput(name="board-1", address="/dev/ttyUSB0")),
         backend=backend,
     )
     test.run()
@@ -90,7 +99,7 @@ def test_test_run_propagates_backend_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(Backend, "run", fail_backend)
 
     with pytest.raises(RuntimeError, match="backend failed"):
-        Test(test_path, backend=backend).run()
+        Test(test_path, device=Device(), backend=backend).run()
 
 
 def test_test_run_returns_device_reported_failure(monkeypatch, tmp_path):
@@ -117,7 +126,7 @@ def test_test_run_returns_device_reported_failure(monkeypatch, tmp_path):
 
     report = Test(
         test_path,
-        device=Device.from_string("address=/dev/ttyUSB0"),
+        device=Device.from_input(DeviceInput(address="/dev/ttyUSB0")),
         backend=backend,
     ).run()
 
@@ -143,7 +152,7 @@ def test_test_run_notifies_observer_of_final_status(monkeypatch, tmp_path):
         lambda _backend, _test_path, _device, **kwargs: None,
     )
 
-    Test(test_path, backend=backend, observers=(Observer(),)).run()
+    Test(test_path, device=Device(), backend=backend, observers=(Observer(),)).run()
 
     assert [(event.test_path.file_name, event.status) for event in events] == [
         ("check.py", TestStatus.CONNECTING),
@@ -184,7 +193,7 @@ def test_test_run_reads_output_after_backend(monkeypatch, tmp_path):
 
     report = Test(
         test_path,
-        device=Device.from_string("address=/dev/ttyUSB0"),
+        device=Device.from_input(DeviceInput(address="/dev/ttyUSB0")),
         backend=backend,
         observers=(Observer(),),
     ).run()
@@ -229,7 +238,7 @@ def test_test_run_uses_expected_output_file(monkeypatch, tmp_path):
 
     report = Test(
         test_path,
-        device=Device.from_string("address=/dev/ttyUSB0"),
+        device=Device.from_input(DeviceInput(address="/dev/ttyUSB0")),
         backend=backend,
     ).run()
 
@@ -274,7 +283,7 @@ def test_test_run_detects_unity_output_without_expected_file(
     report = Test(
         test_path,
         options=TestOpts(output=TestOutputOpts(idle_timeout=0)),
-        device=Device.from_string("address=/dev/ttyUSB0"),
+        device=Device.from_input(DeviceInput(address="/dev/ttyUSB0")),
         backend=backend,
     ).run()
 
@@ -292,7 +301,7 @@ def test_test_run_without_connection_passes(monkeypatch, tmp_path):
         lambda _backend, _test_path, _device, **kwargs: None,
     )
 
-    report = Test(test_path, backend=backend).run()
+    report = Test(test_path, device=Device(), backend=backend).run()
 
     assert report.output == TestOutput((), TestResult.PASS)
     assert report.result is TestResult.PASS
@@ -327,7 +336,7 @@ def test_test_run_parses_with_the_tests_own_output_options(monkeypatch, tmp_path
     )
     test = Test(
         test_path,
-        device=Device.from_string("address=/dev/ttyUSB0"),
+        device=Device.from_input(DeviceInput(address="/dev/ttyUSB0")),
         backend=backend,
     )
 
@@ -336,37 +345,6 @@ def test_test_run_parses_with_the_tests_own_output_options(monkeypatch, tmp_path
     assert len(parser_opts) == 1
     assert parser_opts[0] is test.options.output
     assert test.options.output.framed_output_opts.token is not None
-
-
-def test_test_from_inputs_gives_each_test_its_own_output_token(tmp_path):
-    """Tests built without options do not share an output token."""
-    (tmp_path / "first.py").touch()
-    (tmp_path / "second.py").touch()
-
-    tests = Test.from_inputs(
-        ["first.py", "second.py"],
-        context=TestPathContext(working_dir=tmp_path),
-    )
-
-    tokens = {test.options.output.framed_output_opts.token for test in tests}
-    assert len(tests) == 2
-    assert None not in tokens
-    assert len(tokens) == 2
-
-
-def test_test_from_inputs_shares_supplied_options(tmp_path):
-    """Options passed in are used as given, including their token."""
-    (tmp_path / "first.py").touch()
-    (tmp_path / "second.py").touch()
-    options = TestOpts()
-
-    tests = Test.from_inputs(
-        ["first.py", "second.py"],
-        options=options,
-        context=TestPathContext(working_dir=tmp_path),
-    )
-
-    assert all(test.options is options for test in tests)
 
 
 def test_test_run_creates_the_parser_before_the_backend_runs(monkeypatch, tmp_path):
@@ -387,7 +365,7 @@ def test_test_run_creates_the_parser_before_the_backend_runs(monkeypatch, tmp_pa
         lambda _backend, _test_path, _device, **kwargs: events.append("backend"),
     )
 
-    Test(test_path, backend=backend).run()
+    Test(test_path, device=Device(), backend=backend).run()
 
     assert events == ["parser", "backend"]
 
@@ -416,6 +394,7 @@ def test_test_run_fails_before_building_when_no_parser_can_be_created(
         Test(
             test_path,
             options=options,
+            device=Device(),
             backend=backend,
             observers=(Observer(),),
         ).run()
@@ -446,7 +425,7 @@ def test_test_run_passes_the_parsers_build_defines_to_the_backend(
         lambda _backend, _test_path, _device, **kwargs: calls.append(kwargs),
     )
 
-    Test(test_path, backend=backend).run()
+    Test(test_path, device=Device(), backend=backend).run()
 
     token = parsers[0].opts.framed_output_opts.token
     assert calls[0]["defines"] == [
@@ -472,21 +451,7 @@ def test_test_run_skips_output_for_name_only_device(monkeypatch, tmp_path):
         lambda _backend, _test_path, _device, **kwargs: None,
     )
 
-    Test(test_path, backend=backend).run()
-
-
-def test_test_from_inputs_preserves_role(tmp_path):
-    """Test construction stores its role."""
-    test_file = tmp_path / "check.py"
-    test_file.touch()
-
-    tests = Test.from_inputs(
-        ["check.py"],
-        options=TestOpts(role="client"),
-        context=TestPathContext(working_dir=tmp_path),
-    )
-
-    assert [test.options.role for test in tests] == ["client"]
+    Test(test_path, device=Device(name="board"), backend=backend).run()
 
 
 def test_test_opts_validates_role():
@@ -524,7 +489,9 @@ def test_test_stores_device_requirement(tmp_path):
     """Test stores its device requirement independently from execution options."""
     test_path = TestPath(tmp_path / "check.py", tmp_path / "check.py", None, "check.py")
 
-    test = Test(test_path, device=Device.from_string("address=/dev/ttyUSB0"))
+    test = Test(
+        test_path, device=Device.from_input(DeviceInput(address="/dev/ttyUSB0"))
+    )
 
-    assert test.device == Device.from_string("address=/dev/ttyUSB0")
+    assert test.device == Device.from_input(DeviceInput(address="/dev/ttyUSB0"))
     assert test.options == TestOpts()
