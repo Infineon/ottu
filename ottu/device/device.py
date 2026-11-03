@@ -1,13 +1,53 @@
 """Runtime device parsing and acquisition."""
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from ottu.config_models.device.device import DeviceConfig, DeviceDefinition
+import yaml
+from pydantic import BaseModel, ConfigDict, Field
 
 from .access import DeviceAccess, DeviceConnection
+
+
+class DeviceDefinition(BaseModel):
+    """A device entry from a version 1 device list."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    name: str
+    uid: str
+    features: list[str | int | float | bool | None | dict[str, Any]] = Field(
+        default_factory=list
+    )
+    address: str | None = None
+
+
+class DeviceList(BaseModel):
+    """Validated contents of a version 1 device list."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    version: Literal[1]
+    devices: list[DeviceDefinition]
+
+
+class DeviceInput(BaseModel):
+    """The values a device must have.
+
+    Every value is optional. ``identifier`` holds a bare value, which may be a
+    name, a UID or an address, as it is not known which one it is.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    identifier: str | None = Field(default=None, min_length=1)
+    name: str | None = Field(default=None, min_length=1)
+    uid: str | None = Field(default=None, min_length=1)
+    features: list[str | int | float | bool | None | dict[str, Any]] = Field(
+        default_factory=list
+    )
+    address: str | None = Field(default=None, min_length=1)
 
 
 @dataclass(frozen=True)
@@ -21,56 +61,26 @@ class Device:
     access: DeviceAccess | None = field(default=None, repr=False)
 
     @classmethod
-    def from_string(cls, device: str) -> "Device":
-        """Parse a device name or comma-separated ``key=value`` parameters."""
-        if "=" not in device:
-            return cls._from_bare_string(device)
-        return cls._from_key_value_string(device)
-
-    @classmethod
-    def _from_bare_string(cls, device: str) -> "Device":
-        access = DeviceAccess.from_value(device)
-        if access is not None:
-            return cls(access=access)
-        return cls(name=device)
-
-    @classmethod
-    def _from_key_value_string(cls, device: str) -> "Device":
-        values: dict[str, str] = {}
-        for item in device.split(","):
-            key, separator, item_value = item.partition("=")
-            key = key.strip()
-            item_value = item_value.strip()
-            if not separator or not key or not item_value:
-                raise ValueError("Device parameters must use key=value format.")
-            if key in values:
-                raise ValueError(f"Device parameter '{key}' was provided twice.")
-            cls._validate_parameter(key)
-            values[key] = item_value
-
-        return cls.from_mapping(values)
-
-    @classmethod
-    def from_mapping(cls, values: Mapping[str, Any]) -> "Device":
-        """Create a device from ``name``, ``uid`` and ``address`` values.
-
-        These are the same parameters that the ``key=value`` form accepts, so
-        the two forms describe a device in the same way.
-        """
-        for key, value in values.items():
-            cls._validate_parameter(key)
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"Device parameter '{key}' must be a string.")
-        return cls(
-            name=values.get("name"),
-            access=cls._resolve_access(values.get("address"), values.get("uid")),
+    def from_input(cls, device_input: DeviceInput) -> "Device":
+        """Resolve a modeled device input into a runtime device."""
+        name = device_input.name
+        access_input = device_input.address is not None or device_input.uid is not None
+        access = (
+            cls._resolve_access(device_input.address, device_input.uid)
+            if access_input
+            else None
         )
-
-    @staticmethod
-    def _validate_parameter(key: str) -> None:
-        field = DeviceDefinition.model_fields.get(key)
-        if field is None or key == "features":
-            raise ValueError(f"Unsupported device parameter '{key}'.")
+        if device_input.identifier is not None:
+            identifier_access = DeviceAccess.from_value(device_input.identifier)
+            if not access_input:
+                access = identifier_access
+            if name is None and identifier_access is None:
+                name = device_input.identifier
+        return cls(
+            name=name,
+            features=device_input.features,
+            access=access,
+        )
 
     @staticmethod
     def _resolve_access(address: str | None, uid: str | None) -> DeviceAccess | None:
@@ -98,10 +108,9 @@ class Device:
     @classmethod
     def from_file(cls, devs_file: str | Path) -> list["Device"]:
         """Load device definitions and resolve them into runtime devices."""
-        return [
-            cls.from_definition(definition)
-            for definition in DeviceConfig.from_file(devs_file)
-        ]
+        with Path(devs_file).open(encoding="utf-8") as config_file:
+            device_list = DeviceList.model_validate(yaml.safe_load(config_file))
+        return [cls.from_definition(definition) for definition in device_list.devices]
 
     @classmethod
     def from_definition(cls, definition: DeviceDefinition) -> "Device":
