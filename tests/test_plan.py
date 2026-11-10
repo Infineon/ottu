@@ -3,8 +3,20 @@
 import pytest
 from ottu.cli.parse import parse_suite_count, parse_suite_device_input
 from ottu.plan import Plan, PlanSuiteInput, PlanTestInput
+from ottu.report import TestReport
 from ottu.suite import RoleCount, Suite, SuiteReplicated, SuiteRole
 from ottu.test_path import TestPathContext
+
+
+class RecordingObserver:
+    def __init__(self):
+        self.skipped = []
+
+    def report_changed(self, report: TestReport) -> None:
+        pass
+
+    def suite_skipped(self, name: str) -> None:
+        self.skipped.append(name)
 
 
 def named(name, **values):
@@ -186,7 +198,9 @@ def test_plan_build_suites_requires_a_device(tmp_path, context):
         build_suites(plan, context=context)
 
 
-def test_plan_build_suites_cli_devices_replace_requires(tmp_path, context, dev_list):
+def test_plan_build_suites_combines_cli_devices_with_requires(
+    tmp_path, context, dev_list
+):
     (tmp_path / "check.py").touch()
     plan = Plan(
         [
@@ -205,17 +219,65 @@ def test_plan_build_suites_cli_devices_replace_requires(tmp_path, context, dev_l
     assert [device.name for device in suite.device_pool[None]] == ["nano"]
 
 
-def test_plan_build_suites_cli_devices_are_used_as_given_without_device_list(
+def test_plan_build_suites_skips_suites_that_conflict_with_cli_devices(
+    tmp_path, context, dev_list
+):
+    (tmp_path / "check.py").touch()
+    plan = Plan(
+        [
+            named("wifi", tests="check.py", requires={"device": [{"name": "uno"}]}),
+            named("ble", tests="check.py", requires={"device": [{"name": "nano"}]}),
+            named("any", tests="check.py"),
+        ]
+    )
+
+    suites = build_suites(
+        plan, context=context, devices=["name=uno"], dev_list=dev_list
+    )
+
+    assert [suite.name for suite in suites] == ["wifi", "any"]
+    assert [
+        [device.name for device in suite.device_pool[None]] for suite in suites
+    ] == [
+        ["uno"],
+        ["uno"],
+    ]
+
+
+def test_plan_build_suites_skips_every_suite_when_no_cli_device_applies(
     tmp_path, context
 ):
     (tmp_path / "check.py").touch()
     plan = Plan(
         [named("a", tests="check.py", requires={"device": [{"name": "other"}]})]
     )
+    observer = RecordingObserver()
 
-    (suite,) = build_suites(plan, context=context, devices=["uno"])
+    assert (
+        plan.build_suites(
+            context,
+            device_inputs=[parse_suite_device_input("name=uno")],
+            observers=[observer],
+        )
+        == []
+    )
+    assert observer.skipped == ["a"]
 
-    assert [device.name for device in suite.device_pool[None]] == ["uno"]
+
+def test_plan_build_suites_keeps_the_position_of_skipped_suites_in_default_names(
+    tmp_path, context
+):
+    (tmp_path / "check.py").touch()
+    plan = Plan(
+        [
+            PlanSuiteInput(tests="check.py", requires={"device": [{"name": "a"}]}),
+            PlanSuiteInput(tests="check.py", requires={"device": [{"name": "b"}]}),
+        ]
+    )
+
+    (suite,) = build_suites(plan, context=context, devices=["name=b"])
+
+    assert suite.name == "Suite 2"
 
 
 def test_plan_build_suites_matches_requires_with_list_values(
@@ -240,8 +302,7 @@ def test_plan_build_suites_matches_requires_with_list_values(
     (wifi,) = build_suites(plan, ["a"], context=context, dev_list=dev_list)
 
     assert [device.name for device in wifi.device_pool[None]] == ["uno"]
-    with pytest.raises(ValueError, match="Suite needs 1 devices, but only 0 matched"):
-        build_suites(plan, ["b"], context=context, dev_list=dev_list)
+    assert build_suites(plan, ["b"], context=context, dev_list=dev_list) == []
 
 
 @pytest.mark.parametrize("value", ["a,b", "[x]", "{x}"])
@@ -524,3 +585,223 @@ def test_plan_build_suites_rejects_an_unknown_suite_name(tmp_path, context):
 
     with pytest.raises(ValueError, match="No suite in the plan matches 'missing'"):
         build_suites(plan, ["missing"], context=context, devices=["uno"])
+
+
+def device_inputs(*values):
+    return tuple(parse_suite_device_input(value) for value in values)
+
+
+def test_combine_device_inputs_without_requested_devices_keeps_the_required():
+    required = device_inputs("name=uno")
+
+    assert Plan._combine_device_inputs(required, ()) == (True, required)
+
+
+def test_combine_device_inputs_without_required_devices_uses_the_requested():
+    requested = device_inputs("name=uno")
+
+    assert Plan._combine_device_inputs((), requested) == (True, requested)
+
+
+def test_combine_device_inputs_without_any_device_is_applicable():
+    assert Plan._combine_device_inputs((), ()) == (True, ())
+
+
+def test_combine_device_inputs_merges_the_values_of_a_pair():
+    applicable, combined = Plan._combine_device_inputs(
+        device_inputs('features=["ble"]'), device_inputs('name=nano,features=["gpio"]')
+    )
+
+    assert applicable
+    (item,) = combined
+    assert item.device.name == "nano"
+    assert item.device.features == ["ble", "gpio"]
+
+
+def test_combine_device_inputs_is_not_applicable_on_a_conflicting_key():
+    assert Plan._combine_device_inputs(
+        device_inputs("name=uno"), device_inputs("name=nano")
+    ) == (False, ())
+
+
+def test_combine_device_inputs_keeps_the_pairs_without_conflict():
+    applicable, combined = Plan._combine_device_inputs(
+        device_inputs("name=uno", 'features=["ble"]'),
+        device_inputs("name=nano", "name=dos"),
+    )
+
+    assert applicable
+    assert [(item.device.name, item.device.features) for item in combined] == [
+        ("nano", ["ble"]),
+        ("dos", ["ble"]),
+    ]
+
+
+def test_combine_device_inputs_combines_inputs_of_the_same_role():
+    applicable, combined = Plan._combine_device_inputs(
+        device_inputs('role=server,features=["hub"]', 'role=client,features=["leaf"]'),
+        device_inputs("role=server,name=srv"),
+    )
+
+    assert applicable
+    assert [
+        (item.role, item.device.name, item.device.features) for item in combined
+    ] == [("server", "srv", ["hub"]), ("client", None, ["leaf"])]
+
+
+def test_combine_device_inputs_is_not_applicable_when_one_role_conflicts():
+    assert Plan._combine_device_inputs(
+        device_inputs("role=server,name=srv", "role=client,name=cl1"),
+        device_inputs("role=server,name=other", "role=client,name=cl1"),
+    ) == (False, ())
+
+
+def test_combine_device_inputs_applies_a_requested_device_to_every_role():
+    applicable, combined = Plan._combine_device_inputs(
+        device_inputs("role=server,name=srv", "role=client,name=cl1"),
+        device_inputs('features=["wifi"]'),
+    )
+
+    assert applicable
+    assert [
+        (item.role, item.device.name, item.device.features) for item in combined
+    ] == [("server", "srv", ["wifi"]), ("client", "cl1", ["wifi"])]
+
+
+@pytest.mark.parametrize("key", ["identifier", "name", "uid", "address"])
+def test_combine_device_inputs_is_not_applicable_on_each_conflicting_key(key):
+    assert Plan._combine_device_inputs(
+        device_inputs(f"{key}=first"), device_inputs(f"{key}=second")
+    ) == (False, ())
+
+
+@pytest.mark.parametrize("key", ["identifier", "name", "uid", "address"])
+def test_combine_device_inputs_accepts_equal_values_of_a_key(key):
+    applicable, combined = Plan._combine_device_inputs(
+        device_inputs(f"{key}=same"), device_inputs(f"{key}=same")
+    )
+
+    assert applicable
+    (item,) = combined
+    assert getattr(item.device, key) == "same"
+
+
+def test_combine_device_inputs_combines_different_keys_of_a_pair():
+    applicable, combined = Plan._combine_device_inputs(
+        device_inputs("name=uno"), device_inputs("uid=abcdef01")
+    )
+
+    assert applicable
+    (item,) = combined
+    assert (item.device.name, item.device.uid) == ("uno", "abcdef01")
+
+
+def test_combine_device_inputs_does_not_repeat_a_shared_feature():
+    _, combined = Plan._combine_device_inputs(
+        device_inputs('features=["wifi","ble"]'),
+        device_inputs('features=["ble","gpio"]'),
+    )
+
+    assert combined[0].device.features == ["wifi", "ble", "gpio"]
+
+
+def test_combine_device_inputs_keeps_unqualified_inputs_without_roles():
+    applicable, combined = Plan._combine_device_inputs(
+        device_inputs("name=uno"), device_inputs("name=uno")
+    )
+
+    assert applicable
+    assert [item.role for item in combined] == [None]
+
+
+def test_combine_device_inputs_keeps_a_role_that_only_the_request_names():
+    applicable, combined = Plan._combine_device_inputs(
+        device_inputs("role=server,name=srv"),
+        device_inputs("role=client,name=cl1"),
+    )
+
+    assert applicable
+    assert [(item.role, item.device.name) for item in combined] == [
+        ("server", "srv"),
+        ("client", "cl1"),
+    ]
+
+
+def test_plan_build_suites_combines_cli_devices_with_role_requirements(
+    role_plan, context, dev_list
+):
+    plan = Plan(
+        [
+            named(
+                "roles",
+                tests=role_plan.suites[0].tests,
+                requires={
+                    "device": [
+                        {"role": "server", "features": ["wifi"]},
+                        {"role": "client", "features": ["ble"]},
+                    ]
+                },
+            )
+        ]
+    )
+
+    (suite,) = build_suites(
+        plan,
+        context=context,
+        devices=["role=server,name=uno", "role=client,name=nano"],
+        dev_list=dev_list,
+    )
+
+    assert {
+        role: [device.name for device in devices]
+        for role, devices in suite.device_pool.items()
+    } == {"server": ["uno"], "client": ["nano"]}
+
+
+def test_plan_build_suites_skips_a_role_suite_when_one_role_conflicts(
+    role_plan, context, dev_list
+):
+    plan = Plan(
+        [
+            named(
+                "roles",
+                tests=role_plan.suites[0].tests,
+                requires={
+                    "device": [
+                        {"role": "server", "name": "uno"},
+                        {"role": "client", "name": "nano"},
+                    ]
+                },
+            )
+        ]
+    )
+
+    suites = build_suites(
+        plan,
+        context=context,
+        devices=["role=server,name=uno", "role=client,name=uno"],
+        dev_list=dev_list,
+    )
+
+    assert suites == []
+
+
+def test_plan_build_suites_skips_a_role_suite_when_a_role_has_no_matching_device(
+    role_plan, context, dev_list
+):
+    plan = Plan(
+        [
+            named(
+                "roles",
+                tests=role_plan.suites[0].tests,
+                requires={
+                    "device": [
+                        {"role": "server", "name": "uno"},
+                        {"role": "client", "features": ["missing"]},
+                    ]
+                },
+            )
+        ]
+    )
+
+    assert build_suites(plan, context=context, dev_list=dev_list) == []
