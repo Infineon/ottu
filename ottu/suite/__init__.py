@@ -1,6 +1,7 @@
 """Suite inputs, the builder that resolves them, and the suites that run."""
 
 from .builder import (
+    InsufficientDevicesError,
     SuiteBuilder,
     SuiteDeviceInput,
     SuiteDeviceResolver,
@@ -23,6 +24,7 @@ from .suite import (
 
 __all__ = [
     "DevicePool",
+    "InsufficientDevicesError",
     "RoleCount",
     "Suite",
     "SuiteBuilder",
