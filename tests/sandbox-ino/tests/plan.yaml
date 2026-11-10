@@ -1,15 +1,38 @@
 version: 1
 
 suites:
-  - name: hello
+  - name: hello-universe
+    tests:
+      - hello-universe
+    requires:
+      device:
+        features:
+          - gpio
+
+  - name: hello-world
     tests:
       - hello-world
-      - hello-universe
-      - hello-continent
 
   - name: network
     tests:
       - role: server
-        test: server
+        test: server/server.ino
       - role: client
-        test: client
+        test: client/client.ino
+        count: 2
+    requires:
+      device:
+        name: infineon:psoc6:cy8ckit_062s2_ai
+
+  - name: uno-test
+    tests: hello-world
+    requires:
+      device:
+        name: arduino:avr:uno
+
+  - name: non-available
+    tests:
+      - hello-world
+    requires:
+      device:
+        name: non-existent-device
