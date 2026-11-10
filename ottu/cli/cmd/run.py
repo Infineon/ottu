@@ -33,7 +33,9 @@ from ottu.test_path import TestPathContext
     type=str,
     help="Device identifier or comma-separated device key=value values, "
     "optionally qualified with role=ROLE. "
-    "Overrides the plan's requires.device.",
+    "Repeat for alternatives (OR). With --plan, each value is combined (AND) "
+    "with every requires.device of a suite; suites it conflicts with or that "
+    "have too few matching devices in --dev-list are skipped.",
 )
 @click.option(
     "--dev-list",
