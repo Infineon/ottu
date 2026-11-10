@@ -233,6 +233,10 @@ class SuiteRoleInputValidator:
             raise ValueError(f"Missing device input for role(s): {', '.join(missing)}.")
 
 
+class InsufficientDevicesError(ValueError):
+    """Raised when too few available devices match a suite's selectors."""
+
+
 class SuiteDeviceResolver:
     """Resolve standard suite selectors into an ordered device pool."""
 
@@ -257,7 +261,7 @@ class SuiteDeviceResolver:
         devices = cls._matching_devices(selectors, available_devices)
         required_count = options.suite_count * options.jobs
         if len(devices) < required_count:
-            raise ValueError(
+            raise InsufficientDevicesError(
                 f"Suite needs {required_count} devices, but only "
                 f"{len(devices)} matched."
             )
@@ -341,7 +345,7 @@ class SuiteRoleDeviceResolver(SuiteDeviceResolver):
             devices = cls._matching_devices(selectors, available_devices)
             required_count = options.count_for_role(role) * options.jobs
             if len(devices) < required_count:
-                raise ValueError(
+                raise InsufficientDevicesError(
                     f"Role '{role}' needs {required_count} devices, but only "
                     f"{len(devices)} matched."
                 )
