@@ -80,6 +80,16 @@ class CliOutput:
             self._print_line(Text("no devices"))
         self._print_separator(spaced=True)
 
+    def suite_skipped(self, name: str) -> None:
+        """Print a plan suite that could not be run with the available devices."""
+        suite_line = Text(f"> suite : {name}   SKIP")
+        suite_line.stylize("blue", 0, len("> suite :"))
+        suite_line.stylize("yellow", len(suite_line.plain) - len("SKIP"))
+        separator = Text("─" * cell_len(suite_line.plain), style="blue")
+        self._console.print(separator, soft_wrap=True)
+        self._console.print(suite_line)
+        self._console.print(separator, soft_wrap=True)
+
     @staticmethod
     def _device_lines(index: int, device: Device) -> tuple[Text, ...]:
         """Format one device as a colored heading and stacked values."""
