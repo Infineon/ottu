@@ -44,6 +44,26 @@ def test_test_report_prints_fail(capsys):
     assert "FAIL" in output
 
 
+def test_suite_skipped_prints_the_suite_name_and_status():
+    class CaptureConsole:
+        renderables = []
+
+        def print(self, renderable, **kwargs):
+            self.renderables.append(renderable)
+
+    console = CaptureConsole()
+    progress = CliOutput(console=console)
+    progress.suite_skipped("uno-test")
+
+    separator = console.renderables[0]
+    assert str(separator) == "─" * len("> suite : uno-test   SKIP")
+    assert separator.style == "blue"
+    suite_line = console.renderables[1]
+    assert str(suite_line) == "> suite : uno-test   SKIP"
+    assert suite_line.spans[-1].style == "yellow"
+    assert console.renderables[2] == separator
+
+
 def test_test_report_prints_unverified(capsys):
     CliOutput.report(make_report("check.py", TestResult.UNVERIFIED))
 
