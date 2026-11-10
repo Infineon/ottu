@@ -16,8 +16,10 @@ from pydantic import (
 )
 
 from ottu.backend import Backend
-from ottu.report import TestReportObserver
+from ottu.device import DeviceInput
+from ottu.report import SuiteSkipNotifier, TestReportObserver
 from ottu.suite import (
+    InsufficientDevicesError,
     RoleCount,
     Suite,
     SuiteBuilder,
@@ -119,32 +121,127 @@ class Plan:
         """Build one suite for each suite of the plan that the selection keeps.
 
         ``tests`` and ``exclude`` are glob patterns that select suites by name.
-        The command overrides the plan. ``device_inputs``, when given, replace
-        the ``requires.device`` of every suite. ``count`` replaces the counts
-        of a suite when one has no role; role counts replace only the
-        counts of those roles. ``jobs`` is given to every suite.
+        The command overrides the plan counts, but not the devices.
+        ``device_inputs`` filter the suites: each one is combined with every
+        ``requires.device`` of a suite, and a suite that no command device can
+        satisfy or that has too few matching available devices is skipped.
+        ``count`` replaces the counts of a suite when one has no role; role
+        counts replace only the counts of those roles. ``jobs`` is given to
+        every suite. Observers that implement ``suite_skipped`` are notified
+        when a suite is skipped.
         """
         suites = []
+        skip_notifier = SuiteSkipNotifier(observers)
         for index, plan_suite in enumerate(self._select(tests, exclude), start=1):
             suite_input = self._suite_input(plan_suite)
-            suites.append(
-                SuiteBuilder.build(
+            applicable, combined_inputs = self._combine_device_inputs(
+                suite_input.device_inputs, device_inputs
+            )
+            suite_name = plan_suite.name or f"Suite {index}"
+            if not applicable:
+                skip_notifier.notify(suite_name)
+                continue
+            try:
+                suite = SuiteBuilder.build(
                     context,
                     replace(
                         suite_input,
                         count_input=self._override_count(
                             suite_input.count_input, count
                         ),
-                        device_inputs=tuple(device_inputs) or suite_input.device_inputs,
+                        device_inputs=combined_inputs,
                     ),
                     dev_list,
                     jobs,
                     backend=backend,
                     observers=observers,
-                    name=plan_suite.name or f"Suite {index}",
+                    name=suite_name,
                 )
-            )
+            except InsufficientDevicesError:
+                skip_notifier.notify(suite_name)
+                continue
+            suites.append(suite)
         return suites
+
+    @classmethod
+    def _combine_device_inputs(
+        cls,
+        required: Sequence[SuiteDeviceInput],
+        requested: Sequence[SuiteDeviceInput],
+    ) -> tuple[bool, tuple[SuiteDeviceInput, ...]]:
+        """Combine the devices a suite requires with the devices requested.
+
+        The inputs of each list are alternatives (OR), and every requested
+        input is combined (AND) with every required input of the same role. A
+        pair whose values conflict is dropped. The suite is not applicable
+        when a role is left with no pair. A list without inputs does not
+        restrict, and an input without a role applies to every role that the
+        other list names. Returns whether the suite is applicable, and the
+        combined device inputs.
+        """
+        if not required or not requested:
+            return True, tuple(required or requested)
+
+        required = cls._expand_roles(required, requested)
+        requested = cls._expand_roles(requested, required)
+        combined: list[SuiteDeviceInput] = []
+        for role in dict.fromkeys(item.role for item in (*required, *requested)):
+            role_required = [item for item in required if item.role == role]
+            role_requested = [item for item in requested if item.role == role]
+            if not role_required or not role_requested:
+                combined.extend(role_required or role_requested)
+                continue
+            merged = [
+                SuiteDeviceInput(role=role, device=device)
+                for required_item in role_required
+                for requested_item in role_requested
+                if (
+                    device := cls._merge_devices(
+                        required_item.device, requested_item.device
+                    )
+                )
+                is not None
+            ]
+            if not merged:
+                return False, ()
+            combined.extend(merged)
+        return True, tuple(combined)
+
+    @staticmethod
+    def _expand_roles(
+        inputs: Sequence[SuiteDeviceInput],
+        other: Sequence[SuiteDeviceInput],
+    ) -> list[SuiteDeviceInput]:
+        """Repeat the inputs without a role for each role the other list names."""
+        roles = list(dict.fromkeys(item.role for item in other if item.role))
+        return [
+            replacement
+            for item in inputs
+            for replacement in (
+                [SuiteDeviceInput(role=role, device=item.device) for role in roles]
+                if item.role is None and roles
+                else [item]
+            )
+        ]
+
+    @staticmethod
+    def _merge_devices(first: DeviceInput, second: DeviceInput) -> DeviceInput | None:
+        """Return the device that satisfies both inputs, or None on a conflict."""
+        values: dict[str, Any] = {}
+        for key in DeviceInput.model_fields:
+            first_value, second_value = getattr(first, key), getattr(second, key)
+            if isinstance(first_value, list):
+                values[key] = [
+                    *first_value,
+                    *(item for item in second_value if item not in first_value),
+                ]
+            elif (
+                None not in (first_value, second_value) and first_value != second_value
+            ):
+                return None
+            else:
+                values[key] = first_value if first_value is not None else second_value
+        return DeviceInput(**values)
 
     def _select(
         self,
