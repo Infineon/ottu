@@ -669,8 +669,9 @@ def test_run_plan_command_count_overrides_the_plan(plan_file):
         root, path, "--device", "board-1", "--device", "board-2", "--count", "2"
     )
 
-    assert one_device.exit_code == 1
-    assert "needs 2 devices" in str(one_device.exception)
+    assert one_device.exit_code == 0
+    assert "> suite : first   SKIP" in one_device.output
+    assert "> suite : second   SKIP" in one_device.output
     assert two_devices.exit_code == 0
 
 
@@ -1693,7 +1694,7 @@ def test_build_suites_uses_the_exclusions_and_count_of_a_suite(tmp_path):
     assert isinstance(suite, SuiteReplicated)
 
 
-def test_build_suites_rejects_insufficient_devices_for_a_count(tmp_path):
+def test_build_suites_skips_insufficient_devices_for_a_count(tmp_path):
     for name in ("a.py", "b.py"):
         (tmp_path / name).touch()
     plan = write_plan(
@@ -1706,11 +1707,12 @@ def test_build_suites_rejects_insufficient_devices_for_a_count(tmp_path):
         "    count: 2\n",
     )
 
-    with pytest.raises(ValueError, match="Suite needs 2 devices, but only 1 matched"):
-        Plan.from_file(plan).build_suites(
-            TestPathContext(working_dir=tmp_path),
-            device_inputs=[suite_device_input(name="board-1")],
-        )
+    suites = Plan.from_file(plan).build_suites(
+        TestPathContext(working_dir=tmp_path),
+        device_inputs=[suite_device_input(name="board-1")],
+    )
+
+    assert suites == []
 
 
 def test_build_suites_builds_a_role_suite_with_the_counts_of_its_roles(
@@ -1764,7 +1766,7 @@ def test_build_suites_requires_a_device(tmp_path):
         Plan.from_file(plan).build_suites(TestPathContext(working_dir=tmp_path))
 
 
-def test_build_suites_replaces_the_required_devices_with_the_command_devices(
+def test_build_suites_combines_the_required_devices_with_the_command_devices(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(
@@ -1791,8 +1793,8 @@ def test_build_suites_replaces_the_required_devices_with_the_command_devices(
 
     (suite,) = Plan.from_file(plan).build_suites(
         TestPathContext(working_dir=tmp_path),
-        device_inputs=[suite_device_input(name="nano")],
+        device_inputs=[suite_device_input(name="uno")],
         dev_list=tmp_path / "devs.yaml",
     )
 
-    assert [device.name for device in suite.device_pool[None]] == ["nano"]
+    assert [device.name for device in suite.device_pool[None]] == ["uno"]
