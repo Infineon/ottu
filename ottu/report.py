@@ -75,6 +75,14 @@ class SuiteReportObserver(Protocol):
         """Handle the start of a suite."""
 
 
+@runtime_checkable
+class SuiteSkipObserver(Protocol):
+    """Observer notified when a suite is skipped before it starts."""
+
+    def suite_skipped(self, name: str) -> None:
+        """Handle a skipped suite."""
+
+
 class TestOutputExporter:
     """Export the output of each finished test to a file in the results directory."""
 
@@ -156,6 +164,22 @@ class SuiteReportNotifier:
         """Hand the suite report to each interested observer in order."""
         for observer in self._observers:
             observer.suite_started(report)
+
+
+class SuiteSkipNotifier:
+    """Notify observers interested in suites skipped before they start."""
+
+    def __init__(self, observers: Sequence[object] = ()) -> None:
+        self._observers = tuple(
+            observer
+            for observer in observers
+            if isinstance(observer, SuiteSkipObserver)
+        )
+
+    def notify(self, name: str) -> None:
+        """Notify interested observers in order."""
+        for observer in self._observers:
+            observer.suite_skipped(name)
 
 
 class QueueTestReportObserver:
